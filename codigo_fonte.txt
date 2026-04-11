@@ -1,0 +1,1274 @@
+﻿import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { BrowserRouter, Route, Routes, Navigate } from "react-router-dom";
+import { Toaster as Sonner } from "@/components/ui/sonner";
+import { Toaster } from "@/components/ui/toaster";
+import { TooltipProvider } from "@/components/ui/tooltip";
+import { AppLayout } from "@/components/AppLayout";
+import { useAuth } from "@/hooks/useAuth";
+import { useApproval } from "@/hooks/useApproval";
+
+import Dashboard from "./pages/Dashboard";
+import Clientes from "./pages/Clientes";
+import Cobrancas from "./pages/Cobrancas";
+import Historico from "./pages/Historico";
+import Auth from "./pages/Auth";
+import PendingApproval from "./pages/PendingApproval";
+import AdminApprovals from "./pages/AdminApprovals";
+import NotFound from "./pages/NotFound";
+
+const queryClient = new QueryClient();
+
+function ProtectedRoutes() {
+  const { user, loading } = useAuth();
+  const { approved, isAdmin, loading: approvalLoading } = useApproval();
+
+  console.log({ loading, approvalLoading, user }); // âœ… aqui pode
+
+
+  // ðŸ”„ Loading geral
+  if (loading || approvalLoading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-background">
+        <div className="text-muted-foreground">Carregando...</div>
+      </div>
+    );
+  }
+
+  // ðŸ” NÃ£o logado â†’ login
+  if (!user) {
+    return <Navigate to="/login" replace />;
+  }
+
+  // ðŸš« NÃ£o aprovado â†’ tela de pendente
+  if (!approved) {
+    return <PendingApproval />;
+  }
+
+  // âœ… Aprovado â†’ entra no sistema
+  return (
+    <AppLayout isAdmin={isAdmin}>
+      <Routes>
+        <Route path="/" element={<Dashboard />} />
+        <Route path="/clientes" element={<Clientes />} />
+        <Route path="/cobrancas" element={<Cobrancas />} />
+        <Route path="/historico" element={<Historico />} />
+
+        {/* ðŸ‘‘ SÃ³ admin vÃª */}
+        {isAdmin && <Route path="/acessos" element={<AdminApprovals />} />}
+
+        <Route path="*" element={<NotFound />} />
+      </Routes>
+    </AppLayout>
+  );
+
+
+}
+
+function AuthRoute() {
+  const { user, loading } = useAuth();
+
+  if (loading) return null;
+
+  if (user) return <Navigate to="/" replace />;
+
+  return <Auth />;
+}
+
+const App = () => (
+  <QueryClientProvider client={queryClient}>
+    <TooltipProvider>
+      <Toaster />
+      <Sonner />
+      <BrowserRouter>
+        <Routes>
+          <Route path="/login" element={<AuthRoute />} />
+          <Route path="/*" element={<ProtectedRoutes />} />
+        </Routes>
+      </BrowserRouter>
+    </TooltipProvider>
+  </QueryClientProvider>
+);
+
+export default App;
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Button } from '@/components/ui/button';
+import { Users, AlertTriangle, Clock, DollarSign, TrendingUp, BarChart3, Send, Upload, UserPlus } from 'lucide-react';
+import { useQuery } from '@tanstack/react-query';
+import { supabase } from '@/integrations/supabase/client';
+import { useNavigate } from 'react-router-dom';
+import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts';
+
+const COLORS = [
+  'hsl(200, 80%, 45%)',
+  'hsl(142, 60%, 40%)',
+  'hsl(0, 72%, 51%)',
+  'hsl(38, 92%, 50%)',
+];
+
+export default function Dashboard() {
+  const navigate = useNavigate();
+
+  const { data: clients } = useQuery({
+    queryKey: ['clients-count'],
+    queryFn: async () => {
+      const { count } = await supabase.from('clients').select('*', { count: 'exact', head: true });
+      return count || 0;
+    },
+  });
+
+  const { data: billingStats } = useQuery({
+    queryKey: ['billing-stats'],
+    queryFn: async () => {
+      const { data } = await supabase.from('billing_records').select('*');
+      if (!data) return { total: 0, overdue: 0, sent: 0, totalAmount: 0, overdueAmount: 0, monthlyData: [], statusData: [] };
+
+      const today = new Date();
+      const overdue = data.filter(r => {
+        const [d, m, y] = r.due_date.split('/');
+        return new Date(+y, +m - 1, +d) < today && r.status !== 'sent';
+      });
+      const sent = data.filter(r => r.status === 'sent');
+
+      // Monthly aggregation
+      const monthMap: Record<string, number> = {};
+      data.forEach(r => {
+        const [, m, y] = r.due_date.split('/');
+        const key = `${m}/${y}`;
+        monthMap[key] = (monthMap[key] || 0) + Number(r.amount);
+      });
+      const monthlyData = Object.entries(monthMap)
+        .slice(-6)
+        .map(([month, total]) => ({ month, total }));
+
+      const statusData = [
+        { name: 'Enviados', value: sent.length },
+        { name: 'Vencidos', value: overdue.length },
+        { name: 'Pendentes', value: data.length - sent.length - overdue.length },
+      ].filter(d => d.value > 0);
+
+      return {
+        total: data.length,
+        overdue: overdue.length,
+        sent: sent.length,
+        totalAmount: data.reduce((sum, r) => sum + Number(r.amount), 0),
+        overdueAmount: overdue.reduce((sum, r) => sum + Number(r.amount), 0),
+        monthlyData,
+        statusData,
+      };
+    },
+  });
+
+  const { data: recentEmails } = useQuery({
+    queryKey: ['recent-emails'],
+    queryFn: async () => {
+      const { data } = await supabase
+        .from('email_logs')
+        .select('*')
+        .order('sent_at', { ascending: false })
+        .limit(5);
+      return data || [];
+    },
+  });
+
+  const { data: emailCount } = useQuery({
+    queryKey: ['email-count'],
+    queryFn: async () => {
+      const { count } = await supabase.from('email_logs').select('*', { count: 'exact', head: true });
+      return count || 0;
+    },
+  });
+
+  const stats = [
+    { title: 'Clientes', value: clients ?? 0, icon: Users, color: 'text-accent' },
+    { title: 'CobranÃ§as', value: billingStats?.total ?? 0, icon: Clock, color: 'text-warning' },
+    { title: 'Vencidas', value: billingStats?.overdue ?? 0, icon: AlertTriangle, color: 'text-destructive', subtitle: billingStats?.overdueAmount ? `R$ ${billingStats.overdueAmount.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}` : undefined },
+    { title: 'Valor Total', value: `R$ ${(billingStats?.totalAmount ?? 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}`, icon: DollarSign, color: 'text-success' },
+    { title: 'E-mails Enviados', value: emailCount ?? 0, icon: Send, color: 'text-accent' },
+    { title: 'Taxa de Envio', value: billingStats?.total ? `${Math.round(((billingStats?.sent ?? 0) / billingStats.total) * 100)}%` : '0%', icon: TrendingUp, color: 'text-success' },
+  ];
+
+  return (
+    <div className="space-y-6">
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+        <div>
+          <h1 className="text-2xl font-bold tracking-tight">Dashboard</h1>
+          <p className="text-muted-foreground text-sm mt-1">VisÃ£o geral das cobranÃ§as</p>
+        </div>
+      </div>
+
+      {/* Stats */}
+      <div className="grid gap-4 grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
+        {stats.map((stat) => (
+          <Card key={stat.title}>
+            <CardHeader className="flex flex-row items-center justify-between pb-2">
+              <CardTitle className="text-xs font-medium text-muted-foreground">{stat.title}</CardTitle>
+              <stat.icon className={`h-4 w-4 ${stat.color}`} />
+            </CardHeader>
+            <CardContent>
+              <div className="text-xl font-bold">{stat.value}</div>
+              {stat.subtitle && <p className="text-xs text-muted-foreground mt-1">{stat.subtitle}</p>}
+            </CardContent>
+          </Card>
+        ))}
+      </div>
+
+      {/* Quick Actions */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-lg flex items-center gap-2">
+            <BarChart3 className="h-5 w-5 text-accent" /> AÃ§Ãµes RÃ¡pidas
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          <div className="flex flex-wrap gap-3">
+            <Button onClick={() => navigate('/cobrancas')} className="gap-2">
+              <Upload className="h-4 w-4" /> Upload de PDF
+            </Button>
+            <Button variant="outline" onClick={() => navigate('/clientes')} className="gap-2">
+              <UserPlus className="h-4 w-4" /> Novo Cliente
+            </Button>
+            <Button variant="outline" onClick={() => navigate('/historico')} className="gap-2">
+              <Send className="h-4 w-4" /> Ver HistÃ³rico
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* Charts */}
+      <div className="grid gap-4 md:grid-cols-2">
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-lg">CobranÃ§as por MÃªs</CardTitle>
+          </CardHeader>
+          <CardContent>
+            {billingStats?.monthlyData && billingStats.monthlyData.length > 0 ? (
+              <ResponsiveContainer width="100%" height={220}>
+                <BarChart data={billingStats.monthlyData}>
+                  <XAxis dataKey="month" tick={{ fontSize: 12 }} />
+                  <YAxis tick={{ fontSize: 12 }} tickFormatter={(v) => `R$${(v/1000).toFixed(0)}k`} />
+                  <Tooltip formatter={(value: number) => [`R$ ${value.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}`, 'Total']} />
+                  <Bar dataKey="total" fill="hsl(200, 80%, 45%)" radius={[4, 4, 0, 0]} />
+                </BarChart>
+              </ResponsiveContainer>
+            ) : (
+              <p className="text-sm text-muted-foreground text-center py-10">Nenhum dado disponÃ­vel ainda.</p>
+            )}
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-lg">Status das CobranÃ§as</CardTitle>
+          </CardHeader>
+          <CardContent>
+            {billingStats?.statusData && billingStats.statusData.length > 0 ? (
+              <div className="flex items-center justify-center">
+                <ResponsiveContainer width="100%" height={220}>
+                  <PieChart>
+                    <Pie data={billingStats.statusData} dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius={80} label={({ name, percent }) => `${name} ${(percent * 100).toFixed(0)}%`}>
+                      {billingStats.statusData.map((_, i) => (
+                        <Cell key={i} fill={COLORS[i % COLORS.length]} />
+                      ))}
+                    </Pie>
+                    <Tooltip />
+                  </PieChart>
+                </ResponsiveContainer>
+              </div>
+            ) : (
+              <p className="text-sm text-muted-foreground text-center py-10">Nenhum dado disponÃ­vel ainda.</p>
+            )}
+          </CardContent>
+        </Card>
+      </div>
+
+      {/* Recent Emails */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-lg">Ãšltimos E-mails Enviados</CardTitle>
+        </CardHeader>
+        <CardContent>
+          {recentEmails && recentEmails.length > 0 ? (
+            <div className="space-y-3">
+              {recentEmails.map((log: any) => (
+                <div key={log.id} className="flex items-center justify-between py-2 border-b last:border-0">
+                  <div>
+                    <p className="text-sm font-medium">{log.client_name}</p>
+                    <p className="text-xs text-muted-foreground">{log.client_email}</p>
+                  </div>
+                  <div className="text-right">
+                    <p className="text-sm font-medium">
+                      R$ {Number(log.amount).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                    </p>
+                    <p className="text-xs text-muted-foreground">
+                      {new Date(log.sent_at).toLocaleDateString('pt-BR')}
+                    </p>
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <p className="text-sm text-muted-foreground">Nenhum e-mail enviado ainda.</p>
+          )}
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+import { useState } from 'react';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { supabase } from '@/integrations/supabase/client';
+import { Card, CardContent, CardHeader } from '@/components/ui/card';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { Label } from '@/components/ui/label';
+import { Plus, Upload, Search, Pencil, Trash2 } from 'lucide-react';
+import { useToast } from '@/hooks/use-toast';
+import { parseClientCSV } from '@/lib/csv-utils';
+
+export default function Clientes() {
+  const { toast } = useToast();
+  const queryClient = useQueryClient();
+  const [search, setSearch] = useState('');
+  const [dialogOpen, setDialogOpen] = useState(false);
+  const [editingClient, setEditingClient] = useState<any>(null);
+  const [form, setForm] = useState({ name: '', email: '', phone: '' });
+
+  const { data: clients = [], isLoading } = useQuery({
+    queryKey: ['clients', search],
+    queryFn: async () => {
+      let query = supabase.from('clients').select('*').order('name');
+      if (search) {
+        query = query.ilike('name', `%${search}%`);
+      }
+      const { data, error } = await query;
+      if (error) throw error;
+      return data;
+    },
+  });
+
+  const saveMutation = useMutation({
+    mutationFn: async (client: { name: string; email: string; phone?: string; id?: string }) => {
+      if (client.id) {
+        const { error } = await supabase.from('clients').update({
+          name: client.name,
+          email: client.email,
+          phone: client.phone || null,
+        }).eq('id', client.id);
+        if (error) throw error;
+      } else {
+        const { error } = await supabase.from('clients').insert({
+          name: client.name,
+          email: client.email,
+          phone: client.phone || null,
+        });
+        if (error) throw error;
+      }
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['clients'] });
+      setDialogOpen(false);
+      setEditingClient(null);
+      setForm({ name: '', email: '', phone: '' });
+      toast({ title: 'Cliente salvo com sucesso!' });
+    },
+    onError: () => {
+      toast({ title: 'Erro ao salvar cliente', variant: 'destructive' });
+    },
+  });
+
+  const deleteMutation = useMutation({
+    mutationFn: async (id: string) => {
+      const { error } = await supabase.from('clients').delete().eq('id', id);
+      if (error) throw error;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['clients'] });
+      toast({ title: 'Cliente removido' });
+    },
+  });
+
+  const importMutation = useMutation({
+    mutationFn: async (file: File) => {
+      const text = await file.text();
+     const lines = text.split('\n').slice(1);
+
+const parsed = lines.map(line => {
+  const cols = line.split(',');
+
+  return {
+    name: cols[1], // Cliente
+    email: cols[2] === '-' ? '' : cols[2],
+    phone: cols[3] === '-' ? '' : cols[3],
+  };
+}).filter(c => c.name);
+      if (parsed.length === 0) throw new Error('Nenhum registro encontrado no CSV');
+      
+      const { error } = await supabase.from('clients').insert(
+        parsed.map(c => ({ name: c.name, email: c.email, phone: c.phone || null }))
+      );
+      if (error) throw error;
+      return parsed.length;
+    },
+    onSuccess: (count) => {
+      queryClient.invalidateQueries({ queryKey: ['clients'] });
+      toast({ title: `${count} clientes importados com sucesso!` });
+    },
+    onError: (err: Error) => {
+      toast({ title: err.message || 'Erro ao importar CSV', variant: 'destructive' });
+    },
+  });
+
+  const handleEdit = (client: any) => {
+    setEditingClient(client);
+    setForm({ name: client.name, email: client.email, phone: client.phone || '' });
+    setDialogOpen(true);
+  };
+
+  const handleNew = () => {
+    setEditingClient(null);
+    setForm({ name: '', email: '', phone: '' });
+    setDialogOpen(true);
+  };
+
+  const handleCSVUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) importMutation.mutate(file);
+    e.target.value = '';
+  };
+
+  return (
+    <div className="space-y-6">
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+        <div>
+          <h1 className="text-2xl font-bold tracking-tight">Clientes</h1>
+          <p className="text-muted-foreground text-sm mt-1">Cadastro de clientes e e-mails</p>
+        </div>
+        <div className="flex gap-2">
+          <input
+  type="file"
+  accept=".csv"
+  id="csvInput"
+  className="hidden"
+  onChange={handleCSVUpload}
+/>
+
+<Button
+  variant="outline"
+  size="sm"
+  onClick={() => document.getElementById('csvInput')?.click()}
+>
+  <Upload className="h-4 w-4 mr-2" />
+  Importar CSV
+</Button>
+          <Button size="sm" onClick={handleNew}>
+            <Plus className="h-4 w-4 mr-2" />Novo Cliente
+          </Button>
+        </div>
+      </div>
+
+      <Card>
+        <CardHeader className="pb-3">
+          <div className="relative max-w-sm">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+            <Input
+              placeholder="Buscar por nome..."
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              className="pl-9"
+            />
+          </div>
+        </CardHeader>
+        <CardContent className="p-0">
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Nome</TableHead>
+                <TableHead>E-mail</TableHead>
+                <TableHead>Telefone</TableHead>
+                <TableHead className="w-24">AÃ§Ãµes</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {isLoading ? (
+                <TableRow>
+                  <TableCell colSpan={4} className="text-center text-muted-foreground">Carregando...</TableCell>
+                </TableRow>
+              ) : clients.length === 0 ? (
+                <TableRow>
+                  <TableCell colSpan={4} className="text-center text-muted-foreground">
+                    Nenhum cliente cadastrado. Adicione manualmente ou importe um CSV.
+                  </TableCell>
+                </TableRow>
+              ) : (
+                clients.map((client) => (
+                  <TableRow key={client.id}>
+                    <TableCell className="font-medium">{client.name}</TableCell>
+                    <TableCell>{client.email}</TableCell>
+                    <TableCell>{client.phone || 'â€”'}</TableCell>
+                    <TableCell>
+                      <div className="flex gap-1">
+                        <Button variant="ghost" size="icon" onClick={() => handleEdit(client)}>
+                          <Pencil className="h-4 w-4" />
+                        </Button>
+                        <Button variant="ghost" size="icon" onClick={() => deleteMutation.mutate(client.id)}>
+                          <Trash2 className="h-4 w-4 text-destructive" />
+                        </Button>
+                      </div>
+                    </TableCell>
+                  </TableRow>
+                ))
+              )}
+            </TableBody>
+          </Table>
+        </CardContent>
+      </Card>
+
+      <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>{editingClient ? 'Editar Cliente' : 'Novo Cliente'}</DialogTitle>
+          </DialogHeader>
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              saveMutation.mutate({ ...form, id: editingClient?.id });
+            }}
+            className="space-y-4"
+          >
+            <div className="space-y-2">
+              <Label>Nome</Label>
+              <Input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} required />
+            </div>
+            <div className="space-y-2">
+              <Label>E-mail</Label>
+              <Input type="email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} required />
+            </div>
+            <div className="space-y-2">
+              <Label>Telefone (opcional)</Label>
+              <Input value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} />
+            </div>
+            <Button type="submit" className="w-full" disabled={saveMutation.isPending}>
+              {saveMutation.isPending ? 'Salvando...' : 'Salvar'}
+            </Button>
+          </form>
+        </DialogContent>
+      </Dialog>
+    </div>
+  );
+}
+import { useState, useCallback } from 'react';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { supabase } from '@/integrations/supabase/client';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Button } from '@/components/ui/button';
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
+import { Badge } from '@/components/ui/badge';
+import { Checkbox } from '@/components/ui/checkbox';
+import { Textarea } from '@/components/ui/textarea';
+import { Upload, Download, Copy, Send, AlertCircle, MessageSquare, CheckCircle2 } from 'lucide-react';
+import { useToast } from '@/hooks/use-toast';
+import { extractFromPDF, type ExtractedRecord } from '@/lib/pdf-extractor';
+import { downloadCSV, copyToClipboard } from '@/lib/csv-utils';
+import type { BillingRecord } from '@/types/billing';
+
+type Filter = 'all' | 'overdue' | 'upcoming' | 'matched' | 'unmatched';
+
+export default function Cobrancas() {
+  const { toast } = useToast();
+  const queryClient = useQueryClient();
+  const [records, setRecords] = useState<BillingRecord[]>([]);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [filter, setFilter] = useState<Filter>('all');
+  const [uploading, setUploading] = useState(false);
+  const [dragOver, setDragOver] = useState(false);
+  const [emailMessage, setEmailMessage] = useState(
+    `Prezado(a) {nome},\n\nInformamos que a sua fatura no valor de R$ {valor} com vencimento em {vencimento} encontra-se pendente.\n\nSolicitamos a gentileza de efetuar o pagamento o mais breve possÃ­vel.\n\nAtenciosamente,\nEquipe Financeira - Modaelli`
+  );
+
+  const { data: clients = [] } = useQuery({
+    queryKey: ['clients-all'],
+    queryFn: async () => {
+      const { data } = await supabase.from('clients').select('*');
+      return data || [];
+    },
+  });
+
+  const matchClients = useCallback((extracted: ExtractedRecord[]) => {
+    // Track already matched client emails to avoid duplicates
+    const usedEmails = new Set<string>();
+
+    return extracted.map((rec): BillingRecord => {
+      const match = clients.find((c) => {
+        const cName = c.name.toLowerCase().trim();
+        const rName = rec.name.toLowerCase().trim();
+        return cName === rName || cName.includes(rName) || rName.includes(cName);
+      });
+
+      const today = new Date();
+      const [d, m, y] = rec.dueDate.split('/');
+      const dueDate = new Date(+y, +m - 1, +d);
+      const isOverdue = dueDate < today;
+
+      // If matched and email already used, still link but mark
+      const email = match?.email;
+      if (email) usedEmails.add(email);
+
+      return {
+        id: crypto.randomUUID(),
+        client_name: rec.name,
+        due_date: rec.dueDate,
+        amount: rec.amount,
+        client_id: match?.id,
+        client_email: email,
+        status: match ? (isOverdue ? 'overdue' : 'matched') : 'unmatched',
+      };
+    });
+  }, [clients]);
+
+  const processFile = async (file: File) => {
+    setUploading(true);
+    try {
+      const extracted = await extractFromPDF(file);
+      if (extracted.length === 0) {
+        toast({
+          title: 'Nenhum registro encontrado',
+          description: 'O padrÃ£o de extraÃ§Ã£o pode precisar de ajuste para o formato do seu PDF.',
+          variant: 'destructive',
+        });
+        return;
+      }
+      const matched = matchClients(extracted);
+
+      // Auto-select all records that have email linked (matched/overdue)
+      const autoSelected = new Set<string>();
+      matched.forEach(r => {
+        if (r.client_email && r.status !== 'sent') {
+          autoSelected.add(r.id);
+        }
+      });
+
+      setRecords(matched);
+      setSelected(autoSelected);
+
+      const matchedCount = matched.filter(r => r.client_email).length;
+      const unmatchedCount = matched.length - matchedCount;
+      toast({
+        title: `${extracted.length} registros extraÃ­dos`,
+        description: `${matchedCount} vinculados automaticamente${unmatchedCount > 0 ? `, ${unmatchedCount} sem vÃ­nculo` : ''}`,
+      });
+    } catch {
+      toast({ title: 'Erro ao processar PDF', variant: 'destructive' });
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  const handleDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    setDragOver(false);
+    const file = e.dataTransfer.files[0];
+    if (file?.type === 'application/pdf') processFile(file);
+  };
+
+  const handleFileInput = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) processFile(file);
+    e.target.value = '';
+  };
+
+  const toggleSelect = (id: string) => {
+    setSelected(prev => {
+      const next = new Set(prev);
+      next.has(id) ? next.delete(id) : next.add(id);
+      return next;
+    });
+  };
+
+  const selectAll = () => {
+    if (selected.size === filteredRecords.filter(r => r.client_email && r.status !== 'sent').length) {
+      setSelected(new Set());
+    } else {
+      setSelected(new Set(filteredRecords.filter(r => r.client_email && r.status !== 'sent').map(r => r.id)));
+    }
+  };
+
+  const sendMutation = useMutation({
+    mutationFn: async (recordsToSend: BillingRecord[]) => {
+      // Deduplicate by email - only send once per email address
+      const seenEmails = new Set<string>();
+      const uniqueRecords = recordsToSend.filter(r => {
+        if (!r.client_email || seenEmails.has(r.client_email)) return false;
+        seenEmails.add(r.client_email);
+        return true;
+      });
+
+      const { data, error } = await supabase.functions.invoke('send-billing-email', {
+        body: {
+          records: uniqueRecords.map(r => ({
+            client_name: r.client_name,
+            client_email: r.client_email,
+            due_date: r.due_date,
+            amount: r.amount,
+          })),
+          messageTemplate: emailMessage,
+        },
+      });
+
+      if (error) throw error;
+      return data as { sent: number; failed: number };
+    },
+    onSuccess: (data) => {
+      const msg = data.failed > 0
+        ? `${data.sent} enviados, ${data.failed} falharam`
+        : `${data.sent} cobranÃ§as enviadas com sucesso!`;
+      toast({ title: msg });
+      setRecords(prev => prev.map(r => selected.has(r.id) && r.client_email ? { ...r, status: 'sent' as const } : r));
+      setSelected(new Set());
+      queryClient.invalidateQueries({ queryKey: ['recent-emails'] });
+      queryClient.invalidateQueries({ queryKey: ['billing-stats'] });
+    },
+    onError: () => {
+      toast({ title: 'Erro ao enviar cobranÃ§as', variant: 'destructive' });
+    },
+  });
+
+  const handleSend = () => {
+    const toSend = records.filter(r => selected.has(r.id) && r.client_email && r.status !== 'sent');
+    if (toSend.length === 0) {
+      toast({ title: 'Selecione registros com e-mail vinculado', variant: 'destructive' });
+      return;
+    }
+    sendMutation.mutate(toSend);
+  };
+
+  const filteredRecords = records.filter(r => {
+    if (filter === 'overdue') return r.status === 'overdue';
+    if (filter === 'matched') return r.status === 'matched' || r.status === 'overdue';
+    if (filter === 'unmatched') return r.status === 'unmatched';
+    if (filter === 'upcoming') {
+      const [d, m, y] = r.due_date.split('/');
+      const due = new Date(+y, +m - 1, +d);
+      const diff = (due.getTime() - Date.now()) / (1000 * 60 * 60 * 24);
+      return diff >= 0 && diff <= 7;
+    }
+    return true;
+  });
+
+  const totalAmount = filteredRecords.reduce((sum, r) => sum + r.amount, 0);
+
+  // Preview of the email with first record's data filled in
+  const previewRecord = records.find(r => r.client_email);
+  const emailPreview = previewRecord
+    ? emailMessage
+        .replace(/\{nome\}/g, previewRecord.client_name)
+        .replace(/\{valor\}/g, previewRecord.amount.toLocaleString('pt-BR', { minimumFractionDigits: 2 }))
+        .replace(/\{vencimento\}/g, previewRecord.due_date)
+    : null;
+
+  return (
+    <div className="space-y-6">
+      <div>
+        <h1 className="text-2xl font-bold tracking-tight">CobranÃ§as</h1>
+        <p className="text-muted-foreground text-sm mt-1">Upload do PDF, revisÃ£o e envio</p>
+      </div>
+
+      <Card>
+        <CardContent className="p-6">
+          <label
+            onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
+            onDragLeave={() => setDragOver(false)}
+            onDrop={handleDrop}
+            className={`flex flex-col items-center justify-center gap-3 py-12 border-2 border-dashed rounded-lg cursor-pointer transition-colors ${
+              dragOver ? 'border-accent bg-accent/5' : 'border-border hover:border-accent/50'
+            }`}
+          >
+            <input type="file" accept=".pdf" className="hidden" onChange={handleFileInput} />
+            {uploading ? (
+              <div className="text-sm text-muted-foreground">Processando PDF...</div>
+            ) : (
+              <>
+                <Upload className="h-10 w-10 text-muted-foreground" />
+                <div className="text-center">
+                  <p className="text-sm font-medium">Arraste o PDF financeiro aqui</p>
+                  <p className="text-xs text-muted-foreground mt-1">ou clique para selecionar</p>
+                </div>
+              </>
+            )}
+          </label>
+        </CardContent>
+      </Card>
+
+      {/* Email Message Template */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-lg flex items-center gap-2">
+            <MessageSquare className="h-5 w-5 text-accent" /> Mensagem do E-mail
+          </CardTitle>
+          <p className="text-xs text-muted-foreground">
+            Use {'{nome}'}, {'{valor}'} e {'{vencimento}'} como variÃ¡veis. Preenchimento automÃ¡tico.
+          </p>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <Textarea
+            value={emailMessage}
+            onChange={(e) => setEmailMessage(e.target.value)}
+            rows={6}
+            placeholder="Escreva a mensagem do e-mail de cobranÃ§a..."
+          />
+          {emailPreview && (
+            <div className="rounded-lg bg-muted p-4">
+              <p className="text-xs font-medium text-muted-foreground mb-2">PrÃ©-visualizaÃ§Ã£o:</p>
+              <p className="text-sm whitespace-pre-line">{emailPreview}</p>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      {records.length > 0 && (
+        <>
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+            <div className="flex gap-2 flex-wrap">
+              {([
+                ['all', 'Todos'],
+                ['overdue', 'Vencidos'],
+                ['upcoming', 'PrÃ³ximos 7 dias'],
+                ['matched', 'Com e-mail'],
+                ['unmatched', 'Sem e-mail'],
+              ] as [Filter, string][]).map(([key, label]) => (
+                <Button
+                  key={key}
+                  variant={filter === key ? 'default' : 'outline'}
+                  size="sm"
+                  onClick={() => setFilter(key)}
+                >
+                  {label}
+                </Button>
+              ))}
+            </div>
+            <div className="flex gap-2">
+              <Button variant="outline" size="sm" onClick={() => downloadCSV(filteredRecords)}>
+                <Download className="h-4 w-4 mr-2" />CSV
+              </Button>
+              <Button variant="outline" size="sm" onClick={() => { copyToClipboard(filteredRecords); toast({ title: 'Copiado!' }); }}>
+                <Copy className="h-4 w-4 mr-2" />Copiar
+              </Button>
+              <Button size="sm" onClick={handleSend} disabled={selected.size === 0 || sendMutation.isPending}>
+                <Send className="h-4 w-4 mr-2" />
+                Enviar ({selected.size})
+              </Button>
+            </div>
+          </div>
+
+          <Card>
+            <CardContent className="p-0">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead className="w-10">
+                      <Checkbox
+                        checked={selected.size > 0 && selected.size === filteredRecords.filter(r => r.client_email && r.status !== 'sent').length}
+                        onCheckedChange={selectAll}
+                      />
+                    </TableHead>
+                    <TableHead>Nome</TableHead>
+                    <TableHead>Vencimento</TableHead>
+                    <TableHead>Valor</TableHead>
+                    <TableHead>E-mail</TableHead>
+                    <TableHead>Status</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {filteredRecords.map((rec) => (
+                    <TableRow key={rec.id}>
+                      <TableCell>
+                        <Checkbox
+                          checked={selected.has(rec.id)}
+                          onCheckedChange={() => toggleSelect(rec.id)}
+                          disabled={rec.status === 'sent' || !rec.client_email}
+                        />
+                      </TableCell>
+                      <TableCell className="font-medium">{rec.client_name}</TableCell>
+                      <TableCell>{rec.due_date}</TableCell>
+                      <TableCell>R$ {rec.amount.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</TableCell>
+                      <TableCell>
+                        {rec.client_email ? (
+                          <span className="text-sm flex items-center gap-1">
+                            <CheckCircle2 className="h-3 w-3 text-green-500" />
+                            {rec.client_email}
+                          </span>
+                        ) : (
+                          <span className="text-sm text-destructive flex items-center gap-1">
+                            <AlertCircle className="h-3 w-3" />NÃ£o vinculado
+                          </span>
+                        )}
+                      </TableCell>
+                      <TableCell>
+                        <Badge
+                          variant={
+                            rec.status === 'sent' ? 'default' :
+                            rec.status === 'overdue' ? 'destructive' :
+                            rec.status === 'matched' ? 'secondary' : 'outline'
+                          }
+                        >
+                          {rec.status === 'sent' ? 'Enviado' :
+                           rec.status === 'overdue' ? 'Vencido' :
+                           rec.status === 'matched' ? 'Vinculado' : 'Sem vÃ­nculo'}
+                        </Badge>
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </CardContent>
+          </Card>
+
+          <div className="text-right text-sm text-muted-foreground">
+            <span className="font-medium text-foreground">
+              Total: R$ {totalAmount.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+            </span>
+            {' Â· '}{filteredRecords.length} registros
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+import { useQuery } from '@tanstack/react-query';
+import { supabase } from '@/integrations/supabase/client';
+import { Card, CardContent } from '@/components/ui/card';
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
+import { Badge } from '@/components/ui/badge';
+
+export default function Historico() {
+  const { data: logs = [], isLoading } = useQuery({
+    queryKey: ['email-logs'],
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from('email_logs')
+        .select('*')
+        .order('sent_at', { ascending: false });
+      if (error) throw error;
+      return data;
+    },
+  });
+
+  return (
+    <div className="space-y-6">
+      <div>
+        <h1 className="text-2xl font-bold tracking-tight">HistÃ³rico</h1>
+        <p className="text-muted-foreground text-sm mt-1">Log de cobranÃ§as enviadas</p>
+      </div>
+
+      <Card>
+        <CardContent className="p-0">
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Cliente</TableHead>
+                <TableHead>E-mail</TableHead>
+                <TableHead>Valor</TableHead>
+                <TableHead>Vencimento</TableHead>
+                <TableHead>Enviado em</TableHead>
+                <TableHead>Status</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {isLoading ? (
+                <TableRow>
+                  <TableCell colSpan={6} className="text-center text-muted-foreground">Carregando...</TableCell>
+                </TableRow>
+              ) : logs.length === 0 ? (
+                <TableRow>
+                  <TableCell colSpan={6} className="text-center text-muted-foreground">
+                    Nenhum e-mail enviado ainda.
+                  </TableCell>
+                </TableRow>
+              ) : (
+                logs.map((log) => (
+                  <TableRow key={log.id}>
+                    <TableCell className="font-medium">{log.client_name}</TableCell>
+                    <TableCell>{log.client_email}</TableCell>
+                    <TableCell>R$ {Number(log.amount).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</TableCell>
+                    <TableCell>{log.due_date}</TableCell>
+                    <TableCell>{new Date(log.sent_at).toLocaleString('pt-BR')}</TableCell>
+                    <TableCell>
+                      <Badge variant={log.status === 'sent' ? 'default' : 'destructive'}>
+                        {log.status === 'sent' ? 'Enviado' : 'Falhou'}
+                      </Badge>
+                    </TableCell>
+                  </TableRow>
+                ))
+              )}
+            </TableBody>
+          </Table>
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+import { Link, useLocation } from 'react-router-dom';
+import modaelliLogo from '@/assets/modaelli-logo.png';
+import { LayoutDashboard, Users, FileText, History, Menu, X, LogOut, ShieldCheck } from 'lucide-react';
+import { useState } from 'react';
+import { cn } from '@/lib/utils';
+import { useAuth } from '@/hooks/useAuth';
+import { Button } from '@/components/ui/button';
+
+const navItems = [
+  { path: '/', label: 'Dashboard', icon: LayoutDashboard },
+  { path: '/clientes', label: 'Clientes', icon: Users },
+  { path: '/cobrancas', label: 'CobranÃ§as', icon: FileText },
+  { path: '/historico', label: 'HistÃ³rico', icon: History },
+];
+
+interface AppLayoutProps {
+  children: React.ReactNode;
+  isAdmin?: boolean;
+}
+
+export function AppLayout({ children, isAdmin }: AppLayoutProps) {
+  const location = useLocation();
+  const [mobileOpen, setMobileOpen] = useState(false);
+  const { user, signOut } = useAuth();
+
+  const allNavItems = isAdmin
+    ? [...navItems, { path: '/acessos', label: 'Acessos', icon: ShieldCheck }]
+    : navItems;
+
+  return (
+    <div className="flex h-screen overflow-hidden">
+      {mobileOpen && (
+        <div className="fixed inset-0 z-40 bg-black/50 md:hidden" onClick={() => setMobileOpen(false)} />
+      )}
+
+      <aside
+        className={cn(
+          "fixed md:static inset-y-0 left-0 z-50 w-64 flex flex-col bg-sidebar text-sidebar-foreground transition-transform md:translate-x-0",
+          mobileOpen ? "translate-x-0" : "-translate-x-full"
+        )}
+      >
+        <div className="flex items-center gap-3 px-6 py-5 border-b border-sidebar-border">
+          <img src={modaelliLogo} alt="Modaelli" className="h-9 w-9 rounded-lg object-cover" />
+          <div>
+            <h1 className="text-sm font-semibold tracking-tight">Modaelli</h1>
+            <p className="text-xs text-sidebar-foreground/60">GestÃ£o Financeira</p>
+          </div>
+          <button className="ml-auto md:hidden" onClick={() => setMobileOpen(false)}>
+            <X className="h-5 w-5" />
+          </button>
+        </div>
+
+        <nav className="flex-1 px-3 py-4 space-y-1">
+          {allNavItems.map(item => {
+            const isActive = location.pathname === item.path;
+            return (
+              <Link
+                key={item.path}
+                to={item.path}
+                onClick={() => setMobileOpen(false)}
+                className={cn(
+                  "flex items-center gap-3 px-3 py-2.5 rounded-md text-sm font-medium transition-colors",
+                  isActive
+                    ? "bg-sidebar-accent text-sidebar-primary"
+                    : "text-sidebar-foreground/70 hover:bg-sidebar-accent hover:text-sidebar-foreground"
+                )}
+              >
+                <item.icon className="h-4 w-4" />
+                {item.label}
+              </Link>
+            );
+          })}
+        </nav>
+
+        <div className="px-4 py-4 border-t border-sidebar-border space-y-3">
+          {user && (
+            <div className="flex items-center justify-between">
+              <p className="text-xs text-sidebar-foreground/60 truncate max-w-[140px]">
+                {user.email}
+              </p>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-7 w-7 text-sidebar-foreground/60 hover:text-sidebar-foreground"
+                onClick={signOut}
+                title="Sair"
+              >
+                <LogOut className="h-4 w-4" />
+              </Button>
+            </div>
+          )}
+          <p className="text-xs text-sidebar-foreground/50">
+            v1.0 â€” Modaelli CobranÃ§as
+          </p>
+        </div>
+      </aside>
+
+      <div className="flex-1 flex flex-col overflow-hidden">
+        <header className="flex items-center gap-4 px-6 py-3 border-b bg-card md:hidden">
+          <button onClick={() => setMobileOpen(true)}>
+            <Menu className="h-5 w-5" />
+          </button>
+          <h1 className="text-sm font-semibold">Modaelli</h1>
+        </header>
+        <main className="flex-1 overflow-y-auto p-6">
+          {children}
+        </main>
+      </div>
+    </div>
+  );
+}
+import * as pdfjsLib from 'pdfjs-dist';
+
+pdfjsLib.GlobalWorkerOptions.workerSrc = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.mjs`;
+
+export interface ExtractedRecord {
+  name: string;
+  dueDate: string;
+  amount: number;
+}
+
+export async function extractFromPDF(file: File): Promise<ExtractedRecord[]> {
+  const arrayBuffer = await file.arrayBuffer();
+  const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+  
+  let fullText = '';
+  for (let i = 1; i <= pdf.numPages; i++) {
+    const page = await pdf.getPage(i);
+    const content = await page.getTextContent();
+    const pageText = content.items
+      .map((item: any) => item.str)
+      .join(' ');
+    fullText += pageText + '\n';
+  }
+
+  return parseFinancialText(fullText);
+}
+
+function parseFinancialText(text: string): ExtractedRecord[] {
+  const records: ExtractedRecord[] = [];
+  
+  // Pattern 1: Name followed by date and currency value
+  // Matches: "JoÃ£o da Silva  15/04/2025  R$ 1.500,00"
+  const pattern1 = /([A-ZÃ€-Ãš][a-zÃ -Ãº]+(?:\s+(?:de|da|do|dos|das|e)?\s*[A-ZÃ€-Ãša-zÃ -Ãº]+)*)\s+(\d{2}\/\d{2}\/\d{4})\s+R?\$?\s*([\d.,]+)/gi;
+  
+  let match;
+  while ((match = pattern1.exec(text)) !== null) {
+    const name = match[1].trim();
+    const dueDate = match[2];
+    const amountStr = match[3].replace(/\./g, '').replace(',', '.');
+    const amount = parseFloat(amountStr);
+    
+    if (name.length > 3 && !isNaN(amount) && amount > 0) {
+      records.push({ name, dueDate, amount });
+    }
+  }
+
+  // Pattern 2: Try line-by-line if pattern 1 found nothing
+  if (records.length === 0) {
+    const lines = text.split('\n').filter(l => l.trim());
+    for (const line of lines) {
+      const dateMatch = line.match(/(\d{2}\/\d{2}\/\d{4})/);
+      const amountMatch = line.match(/R?\$?\s*([\d]{1,3}(?:\.?\d{3})*,\d{2})/);
+      
+      if (dateMatch && amountMatch) {
+        const beforeDate = line.substring(0, line.indexOf(dateMatch[0])).trim();
+        const name = beforeDate.replace(/^\d+\s*[-.]?\s*/, '').trim();
+        const amountStr = amountMatch[1].replace(/\./g, '').replace(',', '.');
+        const amount = parseFloat(amountStr);
+        
+        if (name.length > 3 && !isNaN(amount)) {
+          records.push({
+            name,
+            dueDate: dateMatch[1],
+            amount,
+          });
+        }
+      }
+    }
+  }
+
+  return records;
+}
+import type { BillingRecord } from '@/types/billing';
+
+export function exportToCSV(records: BillingRecord[]): string {
+  const header = 'Nome,E-mail,Data Vencimento,Valor,Status\n';
+  const rows = records.map(r => 
+    `"${r.client_name}","${r.client_email || ''}","${r.due_date}","${r.amount.toFixed(2).replace('.', ',')}","${r.status}"`
+  ).join('\n');
+  return header + rows;
+}
+
+export function downloadCSV(records: BillingRecord[], filename = 'cobrancas.csv') {
+  const csv = exportToCSV(records);
+  const bom = '\uFEFF';
+  const blob = new Blob([bom + csv], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+export function copyToClipboard(records: BillingRecord[]) {
+  const rows = records.map(r => 
+    `${r.client_name}\t${r.client_email || ''}\t${r.due_date}\t${r.amount.toFixed(2).replace('.', ',')}\t${r.status}`
+  );
+  const header = 'Nome\tE-mail\tData Vencimento\tValor\tStatus';
+  const text = header + '\n' + rows.join('\n');
+  navigator.clipboard.writeText(text);
+}
+
+export function parseClientCSV(csvText: string): Array<{ name: string; email: string; phone?: string }> {
+  const lines = csvText.split('\n').filter(l => l.trim());
+  if (lines.length < 2) return [];
+  
+  const headerLine = lines[0].toLowerCase();
+  const separator = headerLine.includes(';') ? ';' : ',';
+  const headers = headerLine.split(separator).map(h => h.trim().replace(/"/g, ''));
+  
+  const nameIdx = headers.findIndex(h => h.includes('nome') || h === 'name');
+  const emailIdx = headers.findIndex(h => h.includes('email') || h.includes('e-mail'));
+  const phoneIdx = headers.findIndex(h => h.includes('telefone') || h.includes('phone') || h.includes('tel'));
+  
+  if (nameIdx === -1 || emailIdx === -1) return [];
+  
+  return lines.slice(1).map(line => {
+    const cols = line.split(separator).map(c => c.trim().replace(/"/g, ''));
+    return {
+      name: cols[nameIdx] || '',
+      email: cols[emailIdx] || '',
+      phone: phoneIdx >= 0 ? cols[phoneIdx] : undefined,
+    };
+  }).filter(c => c.name && c.email);
+}
+export interface Client {
+  id: string;
+  name: string;
+  email: string;
+  phone?: string;
+  created_at?: string;
+}
+
+export interface BillingRecord {
+  id: string;
+  client_name: string;
+  due_date: string;
+  amount: number;
+  client_id?: string;
+  client_email?: string;
+  status: 'matched' | 'unmatched' | 'sent' | 'overdue';
+}
+
+export interface EmailLog {
+  id: string;
+  client_name: string;
+  client_email: string;
+  amount: number;
+  due_date: string;
+  sent_at: string;
+  status: 'sent' | 'failed';
+}
