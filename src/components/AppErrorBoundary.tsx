@@ -8,19 +8,29 @@ interface AppErrorBoundaryProps {
 
 interface AppErrorBoundaryState {
   hasError: boolean;
+  message?: string;
+  stack?: string;
 }
 
 export class AppErrorBoundary extends Component<AppErrorBoundaryProps, AppErrorBoundaryState> {
   state: AppErrorBoundaryState = {
     hasError: false,
+    message: undefined,
+    stack: undefined,
   };
 
-  static getDerivedStateFromError() {
-    return { hasError: true };
+  static getDerivedStateFromError(error: Error) {
+    return {
+      hasError: true,
+      message: error.message || 'Erro desconhecido na interface.',
+    };
   }
 
   componentDidCatch(error: Error, errorInfo: ErrorInfo) {
     console.error('AppErrorBoundary', error, errorInfo);
+    this.setState({
+      stack: errorInfo.componentStack || error.stack || undefined,
+    });
   }
 
   handleReload = () => {
@@ -43,6 +53,11 @@ export class AppErrorBoundary extends Component<AppErrorBoundaryProps, AppErrorB
               A interface foi protegida para não cair inteira. Recarregue a página e, se o problema continuar, me diga
               em qual botão ou tela aconteceu.
             </p>
+            {this.state.message ? (
+              <div className="rounded-xl border border-destructive/30 bg-destructive/5 p-3 text-xs leading-6 text-destructive">
+                <strong>Erro:</strong> {this.state.message}
+              </div>
+            ) : null}
             <Button onClick={this.handleReload} className="rounded-xl">
               Recarregar página
             </Button>

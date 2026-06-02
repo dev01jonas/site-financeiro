@@ -5,6 +5,9 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 }
 
+const SUPPORT_PHONE = '2364-4647'
+const INSTAGRAM_URL = 'https://www.instagram.com/modaelliadvogados'
+
 function formatClientName(value: string) {
   return value
     .trim()
@@ -12,6 +15,132 @@ function formatClientName(value: string) {
     .filter(Boolean)
     .map((part) => part.charAt(0).toUpperCase() + part.slice(1).toLowerCase())
     .join(' ')
+}
+
+function escapeHtml(value: string) {
+  return value
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#39;')
+}
+
+function buildEmailHtml({
+  clientName,
+  dueDate,
+  formattedAmount,
+  personalizedMessage,
+  logoUrl,
+}: {
+  clientName: string
+  dueDate: string
+  formattedAmount: string
+  personalizedMessage: string
+  logoUrl: string | null
+}) {
+  const safeClientName = escapeHtml(clientName)
+  const safeDueDate = escapeHtml(dueDate)
+
+  return `
+    <!DOCTYPE html>
+    <html lang="pt-BR" translate="no" class="notranslate">
+    <head>
+      <meta charset="UTF-8" />
+      <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+      <meta name="google" content="notranslate" />
+      <title>Modaelli | Aviso de cobrança</title>
+    </head>
+    <body translate="no" class="notranslate" style="margin:0;padding:0;background:#eef2f7;">
+      <div translate="no" class="notranslate" style="margin:0;padding:28px 14px;background:#eef2f7;font-family:Arial,Helvetica,sans-serif;color:#172033;">
+        <div style="max-width:680px;margin:0 auto;">
+          <div style="overflow:hidden;border-radius:22px;background:#ffffff;border:1px solid #d9e2ef;box-shadow:0 22px 58px rgba(23,32,51,0.10);">
+            <div style="background:#172842;padding:30px 32px 28px;">
+              <table role="presentation" style="width:100%;border-collapse:collapse;">
+                <tr>
+                  <td style="width:86px;vertical-align:top;">
+                    ${
+                      logoUrl
+                        ? `<div style="width:72px;height:72px;border-radius:18px;background:#ffffff;padding:10px;box-sizing:border-box;">
+                             <img src="${logoUrl}" alt="Modaelli Advogados" style="display:block;width:52px;height:52px;object-fit:contain;" />
+                           </div>`
+                        : `<div style="width:72px;height:72px;border-radius:18px;background:#ffffff;color:#172842;font-size:30px;font-weight:700;line-height:72px;text-align:center;">M</div>`
+                    }
+                  </td>
+                  <td style="vertical-align:top;padding-left:18px;">
+                    <div style="display:inline-block;margin-bottom:10px;padding:6px 10px;border-radius:999px;background:rgba(255,255,255,0.10);border:1px solid rgba(230,237,247,0.18);color:#d8e4f2;font-size:11px;font-weight:700;letter-spacing:1.6px;text-transform:uppercase;">
+                      Modaelli Advogados
+                    </div>
+                    <h1 style="margin:0;color:#ffffff;font-size:30px;line-height:1.15;font-weight:700;">
+                      Aviso de cobrança
+                    </h1>
+                    <p style="margin:10px 0 0;color:#d8e4f2;font-size:14px;line-height:1.65;">
+                      Comunicação financeira institucional com canais oficiais de atendimento.
+                    </p>
+                  </td>
+                </tr>
+              </table>
+            </div>
+
+            <div style="padding:26px 30px 8px;">
+              <table role="presentation" style="width:100%;border-collapse:separate;border-spacing:0 10px;">
+                <tr>
+                  <td style="padding:18px 18px;border:1px solid #dbe4ef;border-radius:16px;background:#f8fafc;">
+                    <div style="font-size:11px;color:#6d7d94;text-transform:uppercase;letter-spacing:1px;font-weight:700;margin-bottom:6px;">Cliente</div>
+                    <div style="font-size:18px;line-height:1.35;color:#172033;font-weight:700;">${safeClientName}</div>
+                  </td>
+                </tr>
+              </table>
+
+              <table role="presentation" style="width:100%;border-collapse:separate;border-spacing:10px 0;margin:0 -10px 20px;">
+                <tr>
+                  <td style="width:50%;padding:18px;border:1px solid #dbe4ef;border-radius:16px;background:#ffffff;">
+                    <div style="font-size:11px;color:#6d7d94;text-transform:uppercase;letter-spacing:1px;font-weight:700;margin-bottom:8px;">Valor</div>
+                    <div style="font-size:26px;line-height:1.2;color:#172033;font-weight:700;">R$ ${formattedAmount}</div>
+                  </td>
+                  <td style="width:50%;padding:18px;border:1px solid #f0d39b;border-radius:16px;background:#fff8ec;">
+                    <div style="font-size:11px;color:#7b5a17;text-transform:uppercase;letter-spacing:1px;font-weight:700;margin-bottom:8px;">Vencimento</div>
+                    <div style="font-size:22px;line-height:1.2;color:#8a5b00;font-weight:700;">${safeDueDate}</div>
+                  </td>
+                </tr>
+              </table>
+
+              <div style="border:1px solid #dbe4ef;border-radius:16px;background:#ffffff;padding:22px;margin-bottom:18px;">
+                <div style="font-size:11px;color:#6d7d94;text-transform:uppercase;letter-spacing:1px;font-weight:700;margin-bottom:12px;">Mensagem</div>
+                <div style="color:#2f405b;font-size:15px;line-height:1.85;">${personalizedMessage}</div>
+              </div>
+
+              <div style="border:1px solid #dbe4ef;border-radius:16px;background:#f7fafc;padding:22px;margin-bottom:18px;">
+                <div style="font-size:11px;color:#6d7d94;text-transform:uppercase;letter-spacing:1px;font-weight:700;margin-bottom:12px;">Dados para pagamento via PIX</div>
+                <div style="color:#172033;font-size:14px;line-height:1.85;">
+                  <strong>Favorecido:</strong> Modaelli Sociedade de Advogados<br />
+                  <strong>CNPJ / Chave PIX:</strong> 48.697.725/0001-07<br />
+                  <strong>Identificação no banco:</strong> Grupo MMM ou Grupo M Intermediações
+                </div>
+              </div>
+
+              <div style="border-radius:16px;background:#172842;padding:20px 22px;color:#e8eff8;margin-bottom:20px;">
+                <div style="font-size:11px;color:#b9c9dc;text-transform:uppercase;letter-spacing:1px;font-weight:700;margin-bottom:10px;">Central de atendimento</div>
+                <div style="font-size:15px;line-height:1.85;">
+                  <strong>Telefone:</strong> <a href="tel:${SUPPORT_PHONE}" style="color:#ffffff;text-decoration:none;">${SUPPORT_PHONE}</a><br />
+                  <strong>Instagram:</strong> <a href="${INSTAGRAM_URL}" target="_blank" rel="noreferrer" style="color:#ffffff;text-decoration:none;">@modaelliadvogados</a>
+                </div>
+              </div>
+
+              <div style="border-top:1px solid #dbe4ef;padding:18px 0 4px;color:#6d7d94;font-size:12px;line-height:1.75;">
+                Em caso de divergência, pagamento já realizado ou necessidade de suporte, entre em contato com nossa equipe financeira e encaminhe o comprovante para baixa no sistema.
+              </div>
+            </div>
+          </div>
+
+          <p style="max-width:620px;margin:14px auto 0;text-align:center;font-size:11px;color:#788ba5;line-height:1.6;">
+            Mensagem automática enviada por Modaelli Advogados. Para atendimento, utilize o telefone ${SUPPORT_PHONE} ou o Instagram oficial.
+          </p>
+        </div>
+      </div>
+    </body>
+    </html>
+  `
 }
 
 Deno.serve(async (req) => {
@@ -58,73 +187,20 @@ Deno.serve(async (req) => {
 
       const clientName = formatClientName(rec.client_name)
       const formattedAmount = rec.amount.toLocaleString('pt-BR', { minimumFractionDigits: 2 })
+      const personalizedMessage = escapeHtml(
+        String(messageTemplate || '')
+          .replace(/\{nome\}/g, clientName)
+          .replace(/\{valor\}/g, formattedAmount)
+          .replace(/\{vencimento\}/g, rec.due_date),
+      ).replace(/\n/g, '<br />')
 
-      const personalizedMessage = (messageTemplate || '')
-        .replace(/\{nome\}/g, clientName)
-        .replace(/\{valor\}/g, formattedAmount)
-        .replace(/\{vencimento\}/g, rec.due_date)
-
-      const htmlBody = `
-        <div style="background: #f3f5f8; padding: 32px 16px; font-family: Arial, sans-serif;">
-          <div style="max-width: 620px; margin: 0 auto; overflow: hidden; border-radius: 18px; background: #ffffff; border: 1px solid #d9dee7; box-shadow: 0 18px 45px rgba(15, 23, 42, 0.08);">
-            <div style="background: linear-gradient(135deg, #182235 0%, #25344f 100%); padding: 28px 32px;">
-              <div style="display: flex; align-items: center; gap: 16px;">
-                ${
-                  logoUrl
-                    ? `<div style="width: 64px; height: 64px; border-radius: 16px; background: #ffffff; padding: 8px; box-sizing: border-box;">
-                         <img src="${logoUrl}" alt="Modaelli" style="display: block; width: 48px; height: 48px; object-fit: contain;" />
-                       </div>`
-                    : `<div style="width: 64px; height: 64px; border-radius: 16px; background: #ffffff; color: #182235; font-size: 28px; font-weight: 700; line-height: 64px; text-align: center;">
-                         M
-                       </div>`
-                }
-                <div>
-                  <div style="font-size: 12px; letter-spacing: 1.6px; text-transform: uppercase; color: #c8d3e6; font-weight: 700;">Modaelli Advogados</div>
-                  <h1 style="margin: 8px 0 0; color: #ffffff; font-size: 28px; line-height: 1.2;">Lembrete de vencimento</h1>
-                </div>
-              </div>
-              <p style="margin: 8px 0 0; color: #d6deec; font-size: 15px; line-height: 1.6;">
-                Comunicamos abaixo os dados para regularizacao do contrato de honorarios junto ao escritorio.
-              </p>
-            </div>
-            <div style="padding: 28px 32px 16px;">
-              <div style="background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 14px; padding: 18px 20px; margin-bottom: 24px;">
-                <table style="width: 100%; border-collapse: collapse;">
-                  <tr>
-                    <td style="padding: 0 0 10px; color: #64748b; font-size: 12px; text-transform: uppercase; letter-spacing: 0.8px;">Cliente</td>
-                    <td style="padding: 0 0 10px; color: #0f172a; font-size: 16px; font-weight: 700; text-align: right;">${clientName}</td>
-                  </tr>
-                  <tr>
-                    <td style="padding: 10px 0; color: #64748b; font-size: 12px; text-transform: uppercase; letter-spacing: 0.8px; border-top: 1px solid #e2e8f0;">Valor</td>
-                    <td style="padding: 10px 0; color: #0f172a; font-size: 22px; font-weight: 700; text-align: right; border-top: 1px solid #e2e8f0;">R$ ${formattedAmount}</td>
-                  </tr>
-                  <tr>
-                    <td style="padding: 10px 0 0; color: #64748b; font-size: 12px; text-transform: uppercase; letter-spacing: 0.8px; border-top: 1px solid #e2e8f0;">Vencimento</td>
-                    <td style="padding: 10px 0 0; color: #b45309; font-size: 16px; font-weight: 700; text-align: right; border-top: 1px solid #e2e8f0;">${rec.due_date}</td>
-                  </tr>
-                </table>
-              </div>
-              <div style="color: #334155; font-size: 15px; line-height: 1.8; white-space: pre-line;">${personalizedMessage}</div>
-              <div style="margin-top: 24px; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 14px; padding: 18px 20px;">
-                <div style="font-size: 12px; letter-spacing: 1px; text-transform: uppercase; color: #64748b; font-weight: 700; margin-bottom: 8px;">Dados para pagamento via PIX</div>
-                <div style="color: #0f172a; font-size: 14px; line-height: 1.8;">
-                  <strong>Favorecido:</strong> Modaelli Sociedade de Advogados<br />
-                  <strong>CNPJ:</strong> 48.697.725/0001-07<br />
-                  <strong>Identificacao no banco:</strong> Grupo MMM ou Grupo M Intermediacoes
-                </div>
-              </div>
-            </div>
-            <div style="padding: 0 32px 28px;">
-              <div style="border-top: 1px solid #e2e8f0; padding-top: 18px; color: #64748b; font-size: 13px; line-height: 1.7;">
-                Em caso de divergencia, pagamento ja realizado ou necessidade de suporte, entre em contato com nossa equipe financeira e encaminhe o comprovante para baixa no sistema.
-              </div>
-            </div>
-          </div>
-          <p style="max-width: 620px; margin: 16px auto 0; text-align: center; font-size: 11px; color: #94a3b8;">
-            Mensagem automatica enviada por Modaelli. Por favor, nao responda este e-mail.
-          </p>
-        </div>
-      `
+      const htmlBody = buildEmailHtml({
+        clientName,
+        dueDate: rec.due_date,
+        formattedAmount,
+        personalizedMessage,
+        logoUrl,
+      })
 
       try {
         const response = await fetch('https://api.resend.com/emails', {
@@ -136,7 +212,7 @@ Deno.serve(async (req) => {
           body: JSON.stringify({
             from: fromEmail,
             to: [rec.client_email],
-            subject: `Modaelli | Aviso de cobranca - vencimento ${rec.due_date}`,
+            subject: `Modaelli | Aviso de cobrança - vencimento ${rec.due_date}`,
             html: htmlBody,
           }),
         })
@@ -162,7 +238,7 @@ Deno.serve(async (req) => {
         })
 
         if (billingInsertError) {
-          throw new Error(`Falha ao registrar cobranca enviada: ${billingInsertError.message}`)
+          throw new Error(`Falha ao registrar cobrança enviada: ${billingInsertError.message}`)
         }
 
         const { error: emailLogInsertError } = await adminSupabase.from('email_logs').insert({
@@ -174,7 +250,7 @@ Deno.serve(async (req) => {
         })
 
         if (emailLogInsertError) {
-          throw new Error(`Falha ao registrar historico de envio: ${emailLogInsertError.message}`)
+          throw new Error(`Falha ao registrar histórico de envio: ${emailLogInsertError.message}`)
         }
 
         results.push({ email: rec.client_email, success: true })

@@ -7,6 +7,7 @@ export interface ExtractedRecord {
   name: string;
   dueDate: string;
   amount: number;
+  email?: string;
 }
 
 function normalizeName(value: string) {
@@ -20,6 +21,43 @@ function parseAmount(value: string) {
   const normalized = value.replace(/[^\d,.-]/g, '').replace(/\./g, '').replace(',', '.');
   const amount = Number.parseFloat(normalized);
   return Number.isNaN(amount) ? 0 : amount;
+}
+
+function isValidEmail(value: string) {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
+}
+
+function parseExcelDate(value: unknown) {
+  if (value instanceof Date && !Number.isNaN(value.getTime())) {
+    return value.toLocaleDateString('pt-BR');
+  }
+
+  if (typeof value === 'number' && value > 0) {
+    const parsed = XLSX.SSF.parse_date_code(value);
+    if (parsed?.d && parsed?.m && parsed?.y) {
+      return `${String(parsed.d).padStart(2, '0')}/${String(parsed.m).padStart(2, '0')}/${parsed.y}`;
+    }
+  }
+
+  const text = String(value || '').trim();
+  if (!text) {
+    return '';
+  }
+
+  const brDate = text.match(/\b(\d{1,2})[/-](\d{1,2})[/-](\d{2,4})\b/);
+  if (brDate) {
+    const [, day, month, year] = brDate;
+    const fullYear = year.length === 2 ? `20${year}` : year;
+    return `${day.padStart(2, '0')}/${month.padStart(2, '0')}/${fullYear}`;
+  }
+
+  const isoDate = text.match(/\b(\d{4})-(\d{1,2})-(\d{1,2})\b/);
+  if (isoDate) {
+    const [, year, month, day] = isoDate;
+    return `${day.padStart(2, '0')}/${month.padStart(2, '0')}/${year}`;
+  }
+
+  return text;
 }
 
 function parseFinancialText(text: string): ExtractedRecord[] {
@@ -76,29 +114,104 @@ function normalizeHeader(value: unknown) {
     .toLowerCase();
 }
 
-function mapRowsToBillingRecords(rows: string[][]): ExtractedRecord[] {
+function normalizeCell(value: unknown) {
+  if (value instanceof Date) {
+    return value;
+  }
+
+  if (typeof value === 'number') {
+    return value;
+  }
+
+  return String(value ?? '').replace(/\s+/g, ' ').trim();
+}
+
+function findColumnIndex(headers: string[], aliases: string[]) {
+  return headers.findIndex((header) => aliases.some((alias) => header === alias || header.includes(alias)));
+}
+
+function mapRowsToBillingRecords(rows: unknown[][]): ExtractedRecord[] {
   if (rows.length === 0) {
     return [];
   }
 
-  const headers = rows[0].map((cell) => normalizeHeader(cell));
-  const nameIndex = headers.findIndex((value) => value.includes('cliente'));
-  const dueDateIndex = headers.findIndex((value) => value.includes('vencimento'));
-  const amountIndex = headers.findIndex((value) => value.includes('valor'));
+  const headerCandidates = rows
+    .map((row, rowIndex) => {
+      const headers = row.map((cell) => normalizeHeader(cell));
+      const nameIndex = findColumnIndex(headers, ['cliente', 'nome', 'sacado', 'devedor', 'pagador', 'contratante']);
+      const dueDateIndex = findColumnIndex(headers, ['vencimento', 'data vencimento', 'dt vencimento', 'venc.', 'dt venc']);
+      const amountIndex = findColumnIndex(headers, ['valor', 'vlr', 'total', 'saldo', 'parcela', 'honorario', 'honorarios']);
+      const emailIndex = findColumnIndex(headers, ['email', 'e-mail', 'mail', 'correio']);
+      const score = [nameIndex, dueDateIndex, amountIndex].filter((index) => index !== -1).length;
+      return { rowIndex, nameIndex, dueDateIndex, amountIndex, emailIndex, score };
+    })
+    .filter((candidate) => candidate.score >= 2)
+    .sort((a, b) => b.score - a.score || a.rowIndex - b.rowIndex);
 
-  if (nameIndex === -1 || dueDateIndex === -1 || amountIndex === -1) {
-    return [];
+  const header = headerCandidates[0];
+  if (!header) {
+    return parseRowsWithoutHeaders(rows);
+  }
+
+  if (header.nameIndex === -1 || header.dueDateIndex === -1 || header.amountIndex === -1) {
+    return parseRowsWithoutHeaders(rows.slice(header.rowIndex + 1));
   }
 
   return rows
-    .slice(1)
+    .slice(header.rowIndex + 1)
     .map((columns) => {
-      const name = normalizeName(columns[nameIndex] || '');
-      const dueDate = String(columns[dueDateIndex] || '').trim();
-      const amount = parseAmount(String(columns[amountIndex] || ''));
-      return { name, dueDate, amount };
+      const name = normalizeName(String(normalizeCell(columns[header.nameIndex]) || ''));
+      const dueDate = parseExcelDate(columns[header.dueDateIndex]);
+      const amountCell = normalizeCell(columns[header.amountIndex]);
+      const amount = typeof amountCell === 'number' ? amountCell : parseAmount(String(amountCell || ''));
+      const email = header.emailIndex >= 0 ? String(normalizeCell(columns[header.emailIndex]) || '').trim().toLowerCase() : '';
+      return { name, dueDate, amount, email: isValidEmail(email) ? email : undefined };
     })
     .filter((record) => record.name.length > 3 && /^\d{2}\/\d{2}\/\d{4}$/.test(record.dueDate) && record.amount > 0);
+}
+
+function parseRowsWithoutHeaders(rows: unknown[][]): ExtractedRecord[] {
+  return rows
+    .map((columns) => {
+      const normalizedColumns = columns.map((column) => normalizeCell(column));
+      const dueDateIndex = normalizedColumns.findIndex((column) => /^\d{2}\/\d{2}\/\d{4}$/.test(parseExcelDate(column)));
+      const amountIndex = normalizedColumns.findIndex((column, index) => {
+        if (index === dueDateIndex) {
+          return false;
+        }
+
+        if (typeof column === 'number') {
+          return column > 0;
+        }
+
+        return parseAmount(String(column || '')) > 0;
+      });
+
+      if (dueDateIndex === -1 || amountIndex === -1) {
+        return null;
+      }
+
+      const nameCell = normalizedColumns.find((column, index) => {
+        if (index === dueDateIndex || index === amountIndex) {
+          return false;
+        }
+
+        const text = String(column || '').trim();
+        return text.length > 3 && /[A-Za-zÀ-Úà-ú]/.test(text);
+      });
+
+      const amountCell = normalizedColumns[amountIndex];
+      const amount = typeof amountCell === 'number' ? amountCell : parseAmount(String(amountCell || ''));
+      const dueDate = parseExcelDate(normalizedColumns[dueDateIndex]);
+      const name = normalizeName(String(nameCell || ''));
+      const emailCell = normalizedColumns.find((column) => isValidEmail(String(column || '').trim()));
+      const email = String(emailCell || '').trim().toLowerCase();
+
+      return { name, dueDate, amount, email: isValidEmail(email) ? email : undefined };
+    })
+    .filter((record): record is ExtractedRecord => {
+      return !!record && record.name.length > 3 && /^\d{2}\/\d{2}\/\d{4}$/.test(record.dueDate) && record.amount > 0;
+    });
 }
 
 async function extractFromPDF(file: File): Promise<ExtractedRecord[]> {
@@ -109,7 +222,7 @@ async function extractFromPDF(file: File): Promise<ExtractedRecord[]> {
   for (let pageIndex = 1; pageIndex <= pdf.numPages; pageIndex += 1) {
     const page = await pdf.getPage(pageIndex);
     const content = await page.getTextContent();
-    const pageText = content.items.map((item: any) => item.str).join(' ');
+    const pageText = content.items.map((item) => ('str' in item ? item.str : '')).join(' ');
     fullText += `${pageText}\n`;
   }
 
@@ -130,24 +243,26 @@ async function extractFromSpreadsheetFile(file: File): Promise<ExtractedRecord[]
   const arrayBuffer = await file.arrayBuffer();
   const workbook = XLSX.read(arrayBuffer, {
     type: 'array',
-    cellDates: false,
-    raw: false,
+    cellDates: true,
+    raw: true,
   });
 
-  const firstSheetName = workbook.SheetNames[0];
-  if (!firstSheetName) {
-    return [];
+  for (const sheetName of workbook.SheetNames) {
+    const worksheet = workbook.Sheets[sheetName];
+    const rows = XLSX.utils.sheet_to_json<unknown[]>(worksheet, {
+      header: 1,
+      raw: true,
+      defval: '',
+      blankrows: false,
+    }).map((row) => row.map(normalizeCell));
+
+    const records = mapRowsToBillingRecords(rows);
+    if (records.length > 0) {
+      return records;
+    }
   }
 
-  const worksheet = workbook.Sheets[firstSheetName];
-  const rows = XLSX.utils.sheet_to_json<(string | number | null)[]>(worksheet, {
-    header: 1,
-    raw: false,
-    defval: '',
-    blankrows: false,
-  }).map((row) => row.map((cell) => String(cell ?? '').trim()));
-
-  return mapRowsToBillingRecords(rows);
+  return [];
 }
 
 function findCompanionHtml(files: File[], indexFileName?: string) {
@@ -190,7 +305,7 @@ async function extractBillingRecordsFromSingleFile(file: File): Promise<Extracte
       return htmlRecords;
     }
 
-    throw new Error('Nao foi possivel ler os dados do arquivo Excel.');
+    throw new Error('Não foi possível ler os dados do arquivo Excel.');
   }
 
   if (fileName.endsWith('.html') || fileName.endsWith('.htm') || file.type.includes('html')) {
@@ -201,10 +316,10 @@ async function extractBillingRecordsFromSingleFile(file: File): Promise<Extracte
       return records;
     }
 
-    throw new Error('Nao foi possivel encontrar cliente, vencimento e valor nesse HTML.');
+    throw new Error('Não foi possível encontrar cliente, vencimento e valor nesse HTML.');
   }
 
-  throw new Error('Formato de arquivo nao suportado.');
+  throw new Error('Formato de arquivo não suportado.');
 }
 
 export async function extractBillingRecords(filesOrFile: File | File[]): Promise<ExtractedRecord[]> {
@@ -243,7 +358,7 @@ export async function extractBillingRecords(filesOrFile: File | File[]): Promise
       }
 
       throw new Error(
-        'Nao foi possivel ler o XLS sozinho. Envie o arquivo .xls junto com o sheet001.htm da pasta auxiliar.',
+        'Não foi possível ler esse Excel. Confira se a planilha tem colunas de cliente, vencimento e valor.',
       );
     }
   }
@@ -252,5 +367,5 @@ export async function extractBillingRecords(filesOrFile: File | File[]): Promise
     return extractBillingRecordsFromSingleFile(htmlFile);
   }
 
-  throw new Error('Formato de arquivo nao suportado.');
+  throw new Error('Formato de arquivo não suportado.');
 }

@@ -54,7 +54,7 @@ export default function Historico() {
             <p className="text-xs font-semibold uppercase tracking-[0.34em] text-slate-300">Histórico de comunicações</p>
             <div className="space-y-3">
               <h1 className="max-w-2xl text-3xl font-semibold tracking-tight sm:text-4xl">
-                Visao institucional dos e-mails enviados e da trilha operacional.
+                Visão institucional dos e-mails enviados e da trilha operacional.
               </h1>
               <p className="max-w-2xl text-sm leading-6 text-slate-300">
                 Consulte rapidamente os disparos já registrados, acompanhe valores comunicados e mantenha uma leitura

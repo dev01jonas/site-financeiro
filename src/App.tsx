@@ -10,8 +10,12 @@ import { useApproval } from '@/hooks/useApproval';
 import Dashboard from './pages/Dashboard';
 import Clientes from './pages/Clientes';
 import Cobrancas from './pages/Cobrancas';
+import EmBreve from './pages/EmBreve';
 import Historico from './pages/Historico';
 import Auth from './pages/Auth';
+import Pagamentos from './pages/Pagamentos';
+import AnalisePendencias from './pages/AnalisePendencias';
+import Automacao from './pages/Automacao';
 import PendingApproval from './pages/PendingApproval';
 import AdminApprovals from './pages/AdminApprovals';
 import NotFound from './pages/NotFound';
@@ -44,8 +48,11 @@ function ProtectedRoutes() {
         <Route path="/" element={<Dashboard />} />
         <Route path="/clientes" element={<Clientes />} />
         <Route path="/cobrancas" element={<Cobrancas />} />
-        <Route path="/pagamentos" element={<Navigate to="/cobrancas" replace />} />
+        <Route path="/pagamentos" element={<Pagamentos />} />
+        <Route path="/analise-pendencias" element={<AnalisePendencias />} />
+        <Route path="/em-breve" element={<EmBreve />} />
         <Route path="/historico" element={<Historico />} />
+        {isAdmin && <Route path="/automacao" element={<Automacao />} />}
         {isAdmin && <Route path="/acessos" element={<AdminApprovals />} />}
         <Route path="*" element={<NotFound />} />
       </Routes>

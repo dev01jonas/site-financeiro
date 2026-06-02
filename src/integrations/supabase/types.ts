@@ -161,6 +161,59 @@ export type Database = {
         }
         Relationships: []
       }
+      pending_items: {
+        Row: {
+          client_id: string | null
+          created_at: string
+          data_vencimento: string | null
+          descricao: string
+          id: string
+          nome_pessoa: string
+          observacoes: string | null
+          prioridade: string
+          status: string
+          tipo_pendencia: string
+          updated_at: string
+          valor: number | null
+        }
+        Insert: {
+          client_id?: string | null
+          created_at?: string
+          data_vencimento?: string | null
+          descricao: string
+          id?: string
+          nome_pessoa: string
+          observacoes?: string | null
+          prioridade?: string
+          status?: string
+          tipo_pendencia?: string
+          updated_at?: string
+          valor?: number | null
+        }
+        Update: {
+          client_id?: string | null
+          created_at?: string
+          data_vencimento?: string | null
+          descricao?: string
+          id?: string
+          nome_pessoa?: string
+          observacoes?: string | null
+          prioridade?: string
+          status?: string
+          tipo_pendencia?: string
+          updated_at?: string
+          valor?: number | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "pending_items_client_id_fkey"
+            columns: ["client_id"]
+            isOneToOne: false
+            referencedRelation: "clients"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       user_approvals: {
         Row: {
           approved: boolean

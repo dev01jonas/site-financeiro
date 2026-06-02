@@ -32,14 +32,14 @@ Deno.serve(async (req) => {
     const fromEmail = rawFromEmail.includes('<') ? rawFromEmail : `Modaelli Advogados <${rawFromEmail}>`
 
     if (!email || typeof email !== 'string') {
-      return new Response(JSON.stringify({ error: 'E-mail do solicitante nao informado.' }), {
+      return new Response(JSON.stringify({ error: 'E-mail do solicitante n?o informado.' }), {
         status: 400,
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },
       })
     }
 
     const safeEmail = escapeHtml(email.trim())
-    const safeName = escapeHtml((fullName || '').trim() || 'Nome nao informado')
+    const safeName = escapeHtml((fullName || '').trim() || 'Nome n?o informado')
     const accessUrl = origin ? `${origin}/acessos` : null
 
     const html = `

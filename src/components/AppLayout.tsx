@@ -1,6 +1,6 @@
 import { Link, useLocation } from 'react-router-dom';
 import modaelliLogo from '@/assets/modaelli-logo.png';
-import { LayoutDashboard, Users, FileText, History, Menu, X, LogOut, ShieldCheck } from 'lucide-react';
+import { LayoutDashboard, Users, FileText, History, Menu, X, LogOut, ShieldCheck, CreditCard, ClipboardList, Bot } from 'lucide-react';
 import { useState } from 'react';
 import { cn } from '@/lib/utils';
 import { useAuth } from '@/hooks/useAuth';
@@ -10,8 +10,10 @@ import { ThemeToggle } from '@/components/ThemeToggle';
 const navItems = [
   { path: '/', label: 'Dashboard', icon: LayoutDashboard },
   { path: '/clientes', label: 'Clientes', icon: Users },
-  { path: '/cobrancas', label: 'Cobrancas', icon: FileText },
-  { path: '/historico', label: 'Historico', icon: History },
+  { path: '/cobrancas', label: 'Cobranças', icon: FileText },
+  { path: '/pagamentos', label: 'Pagamentos', icon: CreditCard },
+  { path: '/analise-pendencias', label: 'Pendências', icon: ClipboardList },
+  { path: '/historico', label: 'Histórico', icon: History },
 ];
 
 interface AppLayoutProps {
@@ -25,11 +27,11 @@ export function AppLayout({ children, isAdmin }: AppLayoutProps) {
   const { user, signOut } = useAuth();
 
   const allNavItems = isAdmin
-    ? [...navItems, { path: '/acessos', label: 'Acessos', icon: ShieldCheck }]
+    ? [...navItems, { path: '/automacao', label: 'Automação', icon: Bot }, { path: '/acessos', label: 'Acessos', icon: ShieldCheck }]
     : navItems;
 
   return (
-    <div className="flex h-screen overflow-hidden">
+    <div className="notranslate flex h-screen overflow-hidden" translate="no">
       {mobileOpen && (
         <div className="fixed inset-0 z-40 bg-black/50 md:hidden" onClick={() => setMobileOpen(false)} />
       )}
@@ -44,7 +46,7 @@ export function AppLayout({ children, isAdmin }: AppLayoutProps) {
           <img src={modaelliLogo} alt="Modaelli" className="h-9 w-9 rounded-lg object-cover" />
           <div>
             <h1 className="text-sm font-semibold tracking-tight">Modaelli</h1>
-            <p className="text-xs text-sidebar-foreground/60">Gestao Financeira</p>
+            <p className="text-xs text-sidebar-foreground/60">Gestão Financeira</p>
           </div>
           <button className="ml-auto md:hidden" onClick={() => setMobileOpen(false)}>
             <X className="h-5 w-5" />
@@ -103,7 +105,9 @@ export function AppLayout({ children, isAdmin }: AppLayoutProps) {
           </button>
           <h1 className="text-sm font-semibold">Modaelli</h1>
         </header>
-        <main className="flex-1 overflow-y-auto p-6">{children}</main>
+        <main className="notranslate flex-1 overflow-y-auto p-6" translate="no">
+          {children}
+        </main>
       </div>
     </div>
   );

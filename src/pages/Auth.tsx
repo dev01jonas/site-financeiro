@@ -84,17 +84,17 @@ export default function Auth() {
         try {
           await notifyAdminAccessRequest(normalizedEmail, normalizedName);
         } catch (notificationError) {
-          console.warn('Nao foi possivel avisar o administrador por e-mail.', notificationError);
+          console.warn('Não foi possível avisar o administrador por e-mail.', notificationError);
         }
 
         toast({
           title: 'Conta criada com sucesso!',
-          description: 'O acesso ficara pendente ate que um administrador aprove esta conta.',
+          description: 'O acesso ficará pendente até que um administrador aprove esta conta.',
         });
         setIsLogin(true);
       }
-    } catch (error: any) {
-      toast({ title: error.message || 'Erro na autenticacao', variant: 'destructive' });
+    } catch (error: unknown) {
+      toast({ title: error instanceof Error ? error.message : 'Erro na autenticação', variant: 'destructive' });
     } finally {
       setLoading(false);
     }
@@ -129,8 +129,8 @@ export default function Auth() {
             <div className={`space-y-4 ${formModeClass}`}>
               <p className="max-w-xl text-lg leading-8 text-slate-200">
                 {isLogin
-                  ? 'Acesse uma area pensada para operacao financeira com leitura institucional, segura e objetiva.'
-                  : 'Solicite seu acesso em um fluxo elegante e controlado, alinhado a rotina interna do escritorio.'}
+                  ? 'Acesse uma área pensada para operação financeira com leitura institucional, segura e objetiva.'
+                  : 'Solicite seu acesso em um fluxo elegante e controlado, alinhado à rotina interna do escritório.'}
               </p>
 
               <div className="grid gap-3">
@@ -139,7 +139,7 @@ export default function Auth() {
                     <ShieldCheck className="h-5 w-5 text-slate-200" />
                     <div>
                       <p className="text-sm font-medium">Acesso controlado</p>
-                      <p className="text-sm text-slate-300">Novos cadastros seguem para aprovacao antes de entrar no sistema.</p>
+                      <p className="text-sm text-slate-300">Novos cadastros seguem para aprovação antes de entrar no sistema.</p>
                     </div>
                   </div>
                 </div>
@@ -147,8 +147,8 @@ export default function Auth() {
                   <div className="flex items-center gap-3">
                     <FileText className="h-5 w-5 text-slate-200" />
                     <div>
-                      <p className="text-sm font-medium">Cobrancas organizadas</p>
-                      <p className="text-sm text-slate-300">Fluxo centralizado para importacao, envio, PIX e boleto simples.</p>
+                      <p className="text-sm font-medium">Cobranças organizadas</p>
+                      <p className="text-sm text-slate-300">Fluxo centralizado para importação, envio, PIX e boleto simples.</p>
                     </div>
                   </div>
                 </div>
@@ -157,7 +157,7 @@ export default function Auth() {
                     <Landmark className="h-5 w-5 text-slate-200" />
                     <div>
                       <p className="text-sm font-medium">Linguagem profissional</p>
-                      <p className="text-sm text-slate-300">Visual sobrio, confiavel e adequado a uma operacao financeira juridica.</p>
+                      <p className="text-sm text-slate-300">Visual sóbrio, confiável e adequado a uma operação financeira jurídica.</p>
                     </div>
                   </div>
                 </div>
@@ -168,7 +168,7 @@ export default function Auth() {
           <div className="relative flex items-end justify-between rounded-[1.6rem] border border-white/10 bg-white/6 p-5 backdrop-blur">
             <div>
               <p className="text-xs uppercase tracking-[0.22em] text-slate-300">Modo atual</p>
-              <p className="mt-2 text-2xl font-semibold">{isLogin ? 'Entrada segura' : 'Solicitacao guiada'}</p>
+              <p className="mt-2 text-2xl font-semibold">{isLogin ? 'Entrada segura' : 'Solicitação guiada'}</p>
             </div>
             <div className="h-14 w-14 rounded-full border border-white/10 bg-white/10 auth-pulse-ring" />
           </div>
@@ -208,12 +208,12 @@ export default function Auth() {
             <div className="space-y-2">
               <p className="text-xs font-semibold uppercase tracking-[0.38em] text-accent">Modaelli Advogados</p>
               <CardTitle className="text-3xl font-semibold tracking-tight">
-                {isLogin ? 'Area restrita' : 'Solicitar acesso'}
+                {isLogin ? 'Área restrita' : 'Solicitar acesso'}
               </CardTitle>
               <p className="mx-auto max-w-sm text-sm leading-6 text-muted-foreground">
                 {isLogin
-                  ? 'Entre para acompanhar clientes, cobrancas e historico com seguranca institucional.'
-                  : 'Cadastre sua conta para encaminhar a aprovacao e acessar a operacao financeira.'}
+                  ? 'Entre para acompanhar clientes, cobranças e histórico com segurança institucional.'
+                  : 'Cadastre sua conta para encaminhar a aprovação e acessar a operação financeira.'}
               </p>
             </div>
           </CardHeader>
@@ -221,8 +221,8 @@ export default function Auth() {
           <CardContent className={`space-y-5 px-6 pb-8 sm:px-8 ${formModeClass}`}>
             <div className="rounded-2xl border border-border/70 bg-background/70 px-4 py-3 text-xs leading-5 text-muted-foreground">
               {isLogin
-                ? 'Ambiente destinado ao acompanhamento de clientes, cobrancas e historico de comunicacoes.'
-                : 'Novas contas entram como pendentes ate a liberacao pelo administrador do escritorio.'}
+                ? 'Ambiente destinado ao acompanhamento de clientes, cobranças e histórico de comunicações.'
+                : 'Novas contas entram como pendentes até a liberação pelo administrador do escritório.'}
             </div>
 
             <form onSubmit={handleSubmit} className="space-y-4">
@@ -274,7 +274,7 @@ export default function Auth() {
                   <Input
                     id="password"
                     type={showPassword ? 'text' : 'password'}
-                    placeholder="Minimo de 6 caracteres"
+                    placeholder="Mínimo de 6 caracteres"
                     value={password}
                     onChange={(event) => setPassword(event.target.value)}
                     className="h-12 rounded-xl border-border/70 bg-background/80 pl-9 pr-20"
@@ -307,7 +307,7 @@ export default function Auth() {
 
             <div className="mt-4 text-center">
               <button type="button" className="text-sm font-medium text-accent hover:underline" onClick={() => setIsLogin(!isLogin)}>
-                {isLogin ? 'Nao tem conta? Criar agora' : 'Ja tem conta? Entrar'}
+                {isLogin ? 'Não tem conta? Criar agora' : 'Já tem conta? Entrar'}
               </button>
             </div>
           </CardContent>

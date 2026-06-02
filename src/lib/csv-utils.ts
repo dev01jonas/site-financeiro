@@ -64,7 +64,7 @@ function normalizeImportedPhone(phone: string) {
 
 function cleanImportedName(rawName: string) {
   const withoutSlashTail = rawName.split('/')[0] || rawName;
-  const withoutProcessTokens = withoutSlashTail.replace(/\b\d[\d.\-\/]{6,}\b/g, ' ');
+  const withoutProcessTokens = withoutSlashTail.replace(/\b\d[\d./-]{6,}\b/g, ' ');
   const lettersOnly = withoutProcessTokens.replace(/[^A-Za-zÀ-ÿ' -]/g, ' ');
   return lettersOnly.replace(/\s+/g, ' ').trim();
 }
