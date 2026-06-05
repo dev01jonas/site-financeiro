@@ -8,13 +8,25 @@ export interface ExtractedRecord {
   dueDate: string;
   amount: number;
   email?: string;
+  description?: string;
 }
 
 function normalizeName(value: string) {
   return value
     .replace(/\s+/g, ' ')
     .replace(/\s*\/\s*.*/, '')
+    .replace(/\s*(?:\.{3}|…)\s*$/, '')
     .trim();
+}
+
+function normalizeComparableText(value: string) {
+  return value
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-zA-Z0-9\s]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLowerCase();
 }
 
 function parseAmount(value: string) {
@@ -103,6 +115,116 @@ function parseFinancialText(text: string): ExtractedRecord[] {
   }
 
   return records;
+}
+
+function isLikelyClientName(line: string) {
+  const normalized = line.trim();
+  const comparable = normalizeComparableText(normalized);
+
+  if (!normalized || normalized.length < 4) return false;
+  if (comparable.length < 4) return false;
+  if (/\b\d{2}\/\d{2}\/\d{4}\b/.test(normalized)) return false;
+  if (/^descricao:/i.test(comparable)) return false;
+
+  const blockedHeaders = [
+    'total',
+    'relatorio de contas a receber',
+    'modaelli advogados associados',
+    'usuario',
+    'data hora',
+    'cliente processo',
+    'vencimento',
+    'pagamento',
+    'centro de receita',
+    'forma de',
+    'forma de pgmto',
+    'pgmto',
+    'status',
+  ];
+
+  if (blockedHeaders.some((header) => comparable === header || comparable.startsWith(`${header} `))) {
+    return false;
+  }
+
+  if (/(honorarios|pix|vencido|centro de receita|processo adm|aguardando numeracao)/i.test(comparable)) {
+    return false;
+  }
+
+  const tokens = comparable.split(' ').filter(Boolean);
+  if (tokens.length < 2) return false;
+
+  const lastToken = tokens[tokens.length - 1];
+  if (['de', 'da', 'do', 'dos', 'das', 'e'].includes(lastToken)) return false;
+
+  return /[A-Za-zÀ-ÿ]/.test(normalized);
+}
+
+function parseIntegraPdfLines(lines: string[]): ExtractedRecord[] {
+  const records: ExtractedRecord[] = [];
+  let currentName = '';
+  let currentDueDate = '';
+
+  for (const rawLine of lines) {
+    const line = rawLine.replace(/\s+/g, ' ').trim();
+    if (!line) continue;
+
+    if (isLikelyClientName(line) && !currentName) {
+      currentName = normalizeName(line);
+      currentDueDate = '';
+      continue;
+    }
+
+    const dateMatch = line.match(/\b(\d{2}\/\d{2}\/\d{4})\b/);
+    if (dateMatch && currentName) {
+      currentDueDate = dateMatch[1];
+    }
+
+    const detailMatch = line.match(/Descri[cç][aã]o:\s*(.+?)\s+Valor:\s*R?\$?\s*([\d.,]+)/i);
+    if (detailMatch && currentName && currentDueDate) {
+      const [, description, amountValue] = detailMatch;
+      const amount = parseAmount(amountValue);
+      if (amount > 0) {
+        records.push({
+          name: currentName,
+          dueDate: currentDueDate,
+          amount,
+          description: description.trim(),
+        });
+      }
+      currentName = '';
+      currentDueDate = '';
+    }
+  }
+
+  return records;
+}
+
+function buildPdfLines(items: Array<{ str?: string; transform?: number[] }>) {
+  const lines: string[] = [];
+  let currentY: number | null = null;
+  let currentParts: string[] = [];
+
+  for (const item of items) {
+    const text = String(item.str || '').trim();
+    if (!text) continue;
+
+    const y = Array.isArray(item.transform) ? Number(item.transform[5]) : currentY ?? 0;
+    if (currentY !== null && Math.abs(y - currentY) > 2) {
+      const built = currentParts.join(' ').replace(/\s+/g, ' ').trim();
+      if (built) lines.push(built);
+      currentParts = [text];
+      currentY = y;
+      continue;
+    }
+
+    currentParts.push(text);
+    currentY = y;
+  }
+
+  const lastLine = currentParts.join(' ').replace(/\s+/g, ' ').trim();
+  if (lastLine) lines.push(lastLine);
+
+  return lines;
 }
 
 function normalizeHeader(value: unknown) {
@@ -197,7 +319,7 @@ function parseRowsWithoutHeaders(rows: unknown[][]): ExtractedRecord[] {
         }
 
         const text = String(column || '').trim();
-        return text.length > 3 && /[A-Za-zÀ-Úà-ú]/.test(text);
+        return text.length > 3 && /[A-Za-zÀ-ÿ]/.test(text);
       });
 
       const amountCell = normalizedColumns[amountIndex];
@@ -219,11 +341,19 @@ async function extractFromPDF(file: File): Promise<ExtractedRecord[]> {
   const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
 
   let fullText = '';
+  const allLines: string[] = [];
   for (let pageIndex = 1; pageIndex <= pdf.numPages; pageIndex += 1) {
     const page = await pdf.getPage(pageIndex);
     const content = await page.getTextContent();
-    const pageText = content.items.map((item) => ('str' in item ? item.str : '')).join(' ');
+    const pageLines = buildPdfLines(content.items as Array<{ str?: string; transform?: number[] }>);
+    allLines.push(...pageLines);
+    const pageText = pageLines.join('\n');
     fullText += `${pageText}\n`;
+  }
+
+  const reportRecords = parseIntegraPdfLines(allLines);
+  if (reportRecords.length > 0) {
+    return reportRecords;
   }
 
   return parseFinancialText(fullText);
