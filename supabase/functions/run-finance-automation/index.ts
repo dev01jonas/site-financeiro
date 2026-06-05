@@ -161,6 +161,22 @@ type AutomationResult = {
   preview: AutomationPreviewRow[]
 }
 
+type LogDashboardSummary = {
+  timestamp: string
+  dryRun: boolean
+  sheetName: string
+  pdfFileName: string
+  processed: number
+  skipped: number
+  matched: number
+  updated: number
+  refreshed: number
+  notFound: number
+  errors: number
+  logRows: number
+  writeStatus: string
+}
+
 function jsonResponse(payload: unknown, status = 200) {
   return new Response(JSON.stringify(payload), {
     status,
@@ -613,7 +629,10 @@ class GoogleSheetsService {
       (sheet: { properties?: { title?: string } }) => sheet.properties?.title === LOG_SHEET_NAME,
     )
 
-    if (exists) return
+    if (exists) {
+      await this.initializeLogSheetLayout()
+      return
+    }
 
     await this.request(':batchUpdate', {
       method: 'POST',
@@ -621,9 +640,41 @@ class GoogleSheetsService {
         requests: [{ addSheet: { properties: { title: LOG_SHEET_NAME } } }],
       }),
     })
+    await this.initializeLogSheetLayout()
+  }
 
-    await this.updateValues(`${quoteSheetName(LOG_SHEET_NAME)}!A1:I1`, [
-      ['Data/hora', 'Linha', 'Cliente', 'Status', 'Ação', 'Origens', 'Mensagem de erro', 'Detalhes', 'Card Trello'],
+  async initializeLogSheetLayout() {
+    await this.batchUpdateValues([
+      {
+        range: `${quoteSheetName(LOG_SHEET_NAME)}!A1:I1`,
+        values: [['Data/hora', 'Linha', 'Cliente', 'Status', 'Ação', 'Origens', 'Mensagem de erro', 'Detalhes', 'Card Trello']],
+      },
+      {
+        range: `${quoteSheetName(LOG_SHEET_NAME)}!K1:N8`,
+        values: [
+          ['DASHBOARD LOG_AUTOMACAO', '', '', ''],
+          ['Última execução', '-', 'Modo', '-'],
+          ['Aba', '-', 'PDF', '-'],
+          ['Linhas lidas', '0', 'Ignoradas', '0'],
+          ['Clientes com match', '0', 'Não encontrados', '0'],
+          ['Atualizados', '0', 'Só data', '0'],
+          ['Erros', '0', 'Logs gravados', '0'],
+          ['Status da gravação', '-', '', ''],
+        ],
+      },
+    ])
+  }
+
+  async updateLogDashboard(summary: LogDashboardSummary) {
+    await this.updateValues(`${quoteSheetName(LOG_SHEET_NAME)}!K1:N8`, [
+      ['DASHBOARD LOG_AUTOMACAO', '', '', ''],
+      ['Última execução', summary.timestamp, 'Modo', summary.dryRun ? 'Teste' : 'Execução'],
+      ['Aba', summary.sheetName, 'PDF', summary.pdfFileName || '-'],
+      ['Linhas lidas', String(summary.processed), 'Ignoradas', String(summary.skipped)],
+      ['Clientes com match', String(summary.matched), 'Não encontrados', String(summary.notFound)],
+      ['Atualizados', String(summary.updated), 'Só data', String(summary.refreshed)],
+      ['Erros', String(summary.errors), 'Logs gravados', String(summary.logRows)],
+      ['Status da gravação', summary.writeStatus, '', ''],
     ])
   }
 
@@ -1178,7 +1229,7 @@ async function runAutomation(req: Request): Promise<AutomationResult> {
 
   if (pdfRecords.length === 0) {
     const timestamp = buildTimestamp()
-    await sheets.appendLogRows([
+    const errorRows = [
       buildLogRow({
         timestamp,
         rowNumber: null,
@@ -1190,7 +1241,23 @@ async function runAutomation(req: Request): Promise<AutomationResult> {
         details: 'A execução foi interrompida antes de consultar planilha, Integra e Trello.',
         cardUrl: '',
       }),
-    ])
+    ]
+    await sheets.appendLogRows(errorRows)
+    await sheets.updateLogDashboard({
+      timestamp,
+      dryRun,
+      sheetName,
+      pdfFileName: body.pdfFileName || '',
+      processed: 0,
+      skipped: 0,
+      matched: 0,
+      updated: 0,
+      refreshed: 0,
+      notFound: 0,
+      errors: 1,
+      logRows: errorRows.length,
+      writeStatus: 'Execução interrompida',
+    })
     throw new Error('PDF não encontrado ou sem registros válidos para processar.')
   }
 
@@ -1345,6 +1412,22 @@ async function runAutomation(req: Request): Promise<AutomationResult> {
   }
 
   await sheets.appendLogRows(logEntries.map(buildLogRow))
+
+  await sheets.updateLogDashboard({
+    timestamp,
+    dryRun,
+    sheetName,
+    pdfFileName: body.pdfFileName || '',
+    processed: sheetRows.length,
+    skipped,
+    matched,
+    updated,
+    refreshed,
+    notFound,
+    errors,
+    logRows: logEntries.length,
+    writeStatus: updateFailureMessage ? 'Falha na gravação' : dryRun ? 'Prévia sem gravação' : 'Gravação realizada',
+  })
 
   if (updateFailureMessage) {
     throw new Error(updateFailureMessage)
