@@ -1297,7 +1297,7 @@ async function runAutomation(req: Request): Promise<AutomationResult> {
       errors += 1
     }
 
-    if (updatePlan.action === 'atualizado') {
+    if (updatePlan.action === 'atualizado' || updatePlan.action === 'data_atualizada') {
       logEntries.push({
         timestamp,
         rowNumber: row.rowNumber,
