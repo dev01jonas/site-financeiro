@@ -1229,17 +1229,6 @@ async function runAutomation(req: Request): Promise<AutomationResult> {
     const pdfRecord = resolvePdfRecordForRow(row, pdfIndex, matchedPdfRecordKeys)
     if (!pdfRecord) {
       ignored += 1
-      logEntries.push({
-        timestamp,
-        rowNumber: row.rowNumber,
-        clientName: row.clientName,
-        status: 'nome_nao_encontrado_no_pdf',
-        action: 'ignorado',
-        sources: [],
-        errorMessage: 'Nome não encontrado no PDF.',
-        details: 'A linha foi preservada porque não houve correspondência entre a coluna I e os nomes extraídos do PDF.',
-        cardUrl: '',
-      })
       continue
     }
 
