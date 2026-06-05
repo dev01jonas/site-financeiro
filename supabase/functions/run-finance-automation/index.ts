@@ -1297,40 +1297,30 @@ async function runAutomation(req: Request): Promise<AutomationResult> {
       errors += 1
     }
 
-    logEntries.push({
-      timestamp,
-      rowNumber: row.rowNumber,
-      clientName: row.clientName,
-      status: errorParts.length > 0 ? 'erro_parcial' : status || 'processado',
-      action: updatePlan.action,
-      sources: [...sources],
-      errorMessage: errorParts.join(' | '),
-      details: [
-        body.pdfFileName ? `PDF: ${body.pdfFileName}` : null,
-        trello.resultLabel ? `Trello: ${trello.resultLabel}` : null,
-        dueDate ? `Vencimento: ${dueDate}` : null,
-      ]
-        .filter(Boolean)
-        .join(' | '),
-      cardUrl: trello.cardUrl,
-    })
+    if (updatePlan.action === 'atualizado') {
+      logEntries.push({
+        timestamp,
+        rowNumber: row.rowNumber,
+        clientName: row.clientName,
+        status: errorParts.length > 0 ? 'erro_parcial' : status || 'processado',
+        action: updatePlan.action,
+        sources: [...sources],
+        errorMessage: errorParts.join(' | '),
+        details: [
+          body.pdfFileName ? `PDF: ${body.pdfFileName}` : null,
+          trello.resultLabel ? `Trello: ${trello.resultLabel}` : null,
+          dueDate ? `Vencimento: ${dueDate}` : null,
+        ]
+          .filter(Boolean)
+          .join(' | '),
+        cardUrl: trello.cardUrl,
+      })
+    }
   }
 
   for (const pdfRecord of pdfIndex.records) {
     if (matchedPdfRecordKeys.has(pdfRecord.recordKey)) continue
-
     notFound += 1
-    logEntries.push({
-      timestamp,
-      rowNumber: null,
-      clientName: pdfRecord.name,
-      status: 'cliente_nao_encontrado_na_planilha',
-      action: 'nao_encontrado',
-      sources: ['PDF'],
-      errorMessage: 'Cliente não encontrado na coluna I da planilha.',
-      details: 'Nenhuma linha da planilha no intervalo selecionado correspondeu ao nome extraído do PDF.',
-      cardUrl: '',
-    })
   }
 
   let updateFailureMessage = ''
