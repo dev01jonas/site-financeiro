@@ -423,6 +423,18 @@ function buildSheetClientRows(values: SheetValues, startRow: number, maxRows: nu
   return { rows, skipped }
 }
 
+function findLastFilledRow(values: SheetValues) {
+  for (let index = values.length - 1; index >= 0; index -= 1) {
+    const row = values[index] || []
+    const hasContent = row.some((cell) => String(cell || '').trim() !== '')
+    if (hasContent) {
+      return index + 1
+    }
+  }
+
+  return 1
+}
+
 function buildPdfRecordIndex(pdfRecords: PdfRecord[]) {
   const records: PreparedPdfRecord[] = []
   const exactLookup = new Map<string, PreparedPdfRecord[]>()
@@ -1387,8 +1399,10 @@ async function runAutomation(req: Request): Promise<AutomationResult> {
     let errors = 0
     let matched = 0
     let notFound = 0
-    let nextRowNumber = sheetValues.length + 1
-    let maxRequestedRow = candidateRows.length > 0 ? Math.max(...candidateRows.map((row) => row.rowNumber)) : startRow
+    const lastFilledRow = findLastFilledRow(sheetValues)
+    let nextRowNumber = lastFilledRow + 1
+    let maxRequestedRow =
+      candidateRows.length > 0 ? Math.max(lastFilledRow, ...candidateRows.map((row) => row.rowNumber)) : lastFilledRow
 
     for (const pdfRecord of pdfIndex.records) {
       try {
@@ -1627,7 +1641,7 @@ async function runAutomation(req: Request): Promise<AutomationResult> {
   let notFound = 0
   let errors = 0
   let matched = 0
-  let nextRowNumber = values.length + 1
+  let nextRowNumber = findLastFilledRow(values) + 1
 
   const processMatchedRow = async (
     row: SheetClientRow,
