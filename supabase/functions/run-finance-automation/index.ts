@@ -8,7 +8,7 @@ const corsHeaders = {
 const GOOGLE_SCOPE = 'https://www.googleapis.com/auth/spreadsheets'
 const LOG_SHEET_NAME = 'LOG_AUTOMACAO'
 const SHEET_CLIENT_COLUMN_INDEX = 9
-const TARGET_START_COLUMN_INDEX = 18 // R
+const TARGET_START_COLUMN_INDEX = 1 // A
 const TARGET_END_COLUMN_INDEX = 32 // AF
 const PREVIEW_LIMIT = 15
 const MONTH_NAMES = [
@@ -99,20 +99,19 @@ type SheetClientRow = {
 }
 
 type ColumnRole =
+  | 'fillDate'
   | 'dueDate'
   | 'amount'
   | 'description'
-  | 'status'
+  | 'financialStatus'
+  | 'recordStatus'
   | 'openAmount'
   | 'paidAmount'
   | 'upcomingAmount'
   | 'daysOverdue'
-  | 'trelloResult'
-  | 'trelloSituation'
+  | 'stageName'
   | 'trelloActionDate'
-  | 'trelloCardUrl'
-  | 'sources'
-  | 'error'
+  | 'stageDays'
   | 'updatedAt'
 
 type TargetColumn = {
@@ -368,20 +367,19 @@ function resolveColumnRole(header: string): ColumnRole | null {
   const normalized = normalizeHeader(header)
   if (!normalized) return null
 
+  if (normalized === 'DATA') return 'fillDate'
   if (['VENCIMENTO', 'DATA_DE_VENCIMENTO', 'DT_VENCIMENTO'].includes(normalized)) return 'dueDate'
   if (['VALOR', 'VALOR_TOTAL', 'TOTAL'].includes(normalized)) return 'amount'
   if (['DESCRICAO', 'DESCRICAO_DA_PARCELA', 'PARCELA'].includes(normalized)) return 'description'
-  if (['STATUS', 'STATUS_FINANCEIRO'].includes(normalized)) return 'status'
+  if (['FINANCEIRO', 'STATUS_FINANCEIRO'].includes(normalized)) return 'financialStatus'
+  if (normalized === 'STATUS') return 'recordStatus'
   if (['VALOR_EM_ABERTO', 'ABERTO', 'SALDO_ABERTO'].includes(normalized)) return 'openAmount'
   if (['VALOR_PAGO', 'PAGO'].includes(normalized)) return 'paidAmount'
   if (['VALOR_A_VENCER', 'A_VENCER'].includes(normalized)) return 'upcomingAmount'
   if (['DIAS_VENCIDOS', 'DIAS_EM_ATRASO', 'DIAS_VENCIDO'].includes(normalized)) return 'daysOverdue'
-  if (['RESULTADO_TRELLO', 'STATUS_TRELLO'].includes(normalized)) return 'trelloResult'
-  if (['SITUACAO_DA_COBRANCA', 'SITUACAO', 'SITUACAO_TRELLO'].includes(normalized)) return 'trelloSituation'
+  if (['REGUA', 'SITUACAO_DA_COBRANCA', 'SITUACAO', 'SITUACAO_TRELLO'].includes(normalized)) return 'stageName'
   if (['DATA_DA_ACAO', 'DATA_ACAO', 'ULTIMA_ACAO'].includes(normalized)) return 'trelloActionDate'
-  if (['CARD_TRELLO', 'LINK_TRELLO', 'URL_TRELLO'].includes(normalized)) return 'trelloCardUrl'
-  if (['ORIGEM', 'ORIGENS', 'FONTE', 'FONTES'].includes(normalized)) return 'sources'
-  if (['ERRO', 'MENSAGEM_DE_ERRO', 'ERROS'].includes(normalized)) return 'error'
+  if (['DIAS_NA_FASE'].includes(normalized)) return 'stageDays'
   if (['DATA_DA_ATUALIZACAO', 'DATA_ATUALIZACAO', 'ATUALIZACAO', 'ULTIMA_ATUALIZACAO'].includes(normalized)) return 'updatedAt'
 
   return null
@@ -490,6 +488,10 @@ function resolvePdfRecordForRow(
 
 function buildTimestamp() {
   return new Date().toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' })
+}
+
+function buildCurrentDate() {
+  return new Date().toLocaleDateString('pt-BR', { timeZone: 'America/Sao_Paulo' })
 }
 
 function base64Url(input: Uint8Array | string) {
@@ -843,15 +845,18 @@ class TrelloService {
   }
 
   async summarizeSituation(card: TrelloCard) {
-    const pieces: string[] = []
     const listName = await this.getListName(card.idList)
-    if (listName) pieces.push(`Lista: ${listName}`)
+    if (listName) return listName
+
     const labels = (card.labels || []).map((label) => label.name).filter(Boolean)
-    if (labels.length > 0) pieces.push(`Etiquetas: ${labels.join(', ')}`)
+    if (labels.length > 0) return labels.join(', ')
+
     const latestComment = (card.actions || []).find((action) => action.type === 'commentCard')?.data?.text
-    if (latestComment) pieces.push(`Ultima acao: ${latestComment.replace(/\s+/g, ' ').trim()}`)
-    if (card.due) pieces.push(`Prazo: ${new Date(card.due).toLocaleDateString('pt-BR')}`)
-    return pieces.join(' | ')
+    if (latestComment) return latestComment.replace(/\s+/g, ' ').trim()
+
+    if (card.due) return new Date(card.due).toLocaleDateString('pt-BR')
+
+    return ''
   }
 }
 
@@ -1031,9 +1036,16 @@ function deriveAmounts(
   return { openAmount: 0, paidAmount: 0, upcomingAmount: parsedAmount }
 }
 
+function deriveRecordStatus(status: string, openAmount: number | null, upcomingAmount: number | null) {
+  if (status === 'QUITADO') return 'INATIVO'
+  if ((openAmount || 0) > 0 || (upcomingAmount || 0) > 0) return 'ATIVO'
+  return ''
+}
+
 function computeColumnValue(
   column: TargetColumn,
   timestamp: string,
+  executionDate: string,
   sources: string[],
   errorMessage: string,
   status: string,
@@ -1046,14 +1058,18 @@ function computeColumnValue(
   trello: TrelloLookupResult,
 ) {
   switch (column.role) {
+    case 'fillDate':
+      return executionDate
     case 'dueDate':
       return dueDate
     case 'amount':
       return formatCurrency(amount)
     case 'description':
       return description
-    case 'status':
+    case 'financialStatus':
       return status
+    case 'recordStatus':
+      return deriveRecordStatus(status, openAmount, upcomingAmount)
     case 'openAmount':
       return formatCurrency(openAmount)
     case 'paidAmount':
@@ -1064,20 +1080,16 @@ function computeColumnValue(
       const diffDays = dueDate ? diffDaysFromToday(dueDate) : null
       return diffDays && diffDays > 0 ? String(diffDays) : '0'
     }
-    case 'trelloResult':
-      return trello.resultLabel
-    case 'trelloSituation':
+    case 'stageName':
       return trello.situation
     case 'trelloActionDate':
       return trello.actionDate
-    case 'trelloCardUrl':
-      return trello.cardUrl
-    case 'sources':
-      return sources.join(', ')
-    case 'error':
-      return errorMessage
+    case 'stageDays': {
+      const diffDays = trello.actionDate ? diffDaysFromToday(trello.actionDate) : null
+      return diffDays !== null && diffDays >= 0 ? String(diffDays) : ''
+    }
     case 'updatedAt':
-      return timestamp
+      return executionDate
     default:
       return ''
   }
@@ -1087,6 +1099,7 @@ function buildUpdatePlan(
   row: SheetClientRow,
   columns: TargetColumn[],
   timestamp: string,
+  executionDate: string,
   sources: string[],
   errorMessage: string,
   status: string,
@@ -1107,6 +1120,7 @@ function buildUpdatePlan(
     const nextValue = computeColumnValue(
       column,
       timestamp,
+      executionDate,
       sources,
       errorMessage,
       status,
@@ -1283,6 +1297,7 @@ async function runAutomation(req: Request): Promise<AutomationResult> {
   )
 
   const timestamp = buildTimestamp()
+  const executionDate = buildCurrentDate()
   const logEntries: AutomationLogEntry[] = []
   const updateRequests: Array<{ range: string; values: SheetValues }> = []
   let updated = 0
@@ -1328,6 +1343,7 @@ async function runAutomation(req: Request): Promise<AutomationResult> {
       row,
       targetColumns,
       timestamp,
+      executionDate,
       [...sources],
       errorParts.join(' | '),
       status,
