@@ -1216,6 +1216,42 @@ function addSheetRequest(
   })
 }
 
+function buildSheetRowLookup(rows: SheetClientRow[]) {
+  const exactLookup = new Map<string, SheetClientRow[]>()
+  for (const row of rows) {
+    const bucket = exactLookup.get(row.normalizedName) || []
+    bucket.push(row)
+    exactLookup.set(row.normalizedName, bucket)
+  }
+
+  return { rows, exactLookup }
+}
+
+function resolveSheetRowForPdfRecord(
+  pdfRecord: PreparedPdfRecord,
+  sheetLookup: ReturnType<typeof buildSheetRowLookup>,
+  usedRowNumbers: Set<number>,
+) {
+  const exactMatches = (sheetLookup.exactLookup.get(pdfRecord.normalizedName) || []).filter(
+    (row) => !usedRowNumbers.has(row.rowNumber),
+  )
+
+  if (exactMatches.length > 0) {
+    return exactMatches[0]
+  }
+
+  if (!pdfRecord.truncated) {
+    return null
+  }
+
+  const truncatedMatches = sheetLookup.rows
+    .filter((row) => !usedRowNumbers.has(row.rowNumber))
+    .filter((row) => canMatchTruncatedName(row.normalizedName, pdfRecord.matchStem))
+    .sort((left, right) => left.normalizedName.length - right.normalizedName.length)
+
+  return truncatedMatches[0] || null
+}
+
 async function assertCanRun(req: Request) {
   const supabaseUrl = Deno.env.get('SUPABASE_URL')
   const anonKey = Deno.env.get('SUPABASE_ANON_KEY') || Deno.env.get('SUPABASE_PUBLISHABLE_KEY')
@@ -1616,6 +1652,12 @@ async function runAutomation(req: Request): Promise<AutomationResult> {
   }
 
   await sheets.appendLogRows(logEntries.map(buildLogRow))
+  await sheets.batchUpdateValues([
+    {
+      range: `${quoteSheetName(LOG_SHEET_NAME)}!K1:O8`,
+      values: Array.from({ length: 8 }, () => Array.from({ length: 5 }, () => '')),
+    },
+  ])
 
   await sheets.updateLogDashboard({
     timestamp,
@@ -1632,6 +1674,13 @@ async function runAutomation(req: Request): Promise<AutomationResult> {
     logRows: logEntries.length,
     writeStatus: updateFailureMessage ? 'Falha na gravação' : dryRun ? 'Prévia sem gravação' : 'Gravação realizada',
   })
+
+  await sheets.batchUpdateValues([
+    {
+      range: `${quoteSheetName(LOG_SHEET_NAME)}!K1:O8`,
+      values: Array.from({ length: 8 }, () => Array.from({ length: 5 }, () => '')),
+    },
+  ])
 
   if (updateFailureMessage) {
     throw new Error(updateFailureMessage)
