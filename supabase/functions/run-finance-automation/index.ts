@@ -10,7 +10,6 @@ const LOG_SHEET_NAME = 'LOG_AUTOMACAO'
 const SHEET_CLIENT_COLUMN_INDEX = 9
 const TARGET_START_COLUMN_INDEX = 1 // A
 const TARGET_END_COLUMN_INDEX = 32 // AF
-const PREVIEW_LIMIT = 15
 const MONTH_NAMES = [
   'JANEIRO',
   'FEVEREIRO',
@@ -492,6 +491,10 @@ function buildTimestamp() {
 
 function buildCurrentDate() {
   return new Date().toLocaleDateString('pt-BR', { timeZone: 'America/Sao_Paulo' })
+}
+
+function createEmptyRow(length: number) {
+  return Array.from({ length }, () => '')
 }
 
 function base64Url(input: Uint8Array | string) {
@@ -1201,6 +1204,18 @@ function buildPreviewRow(entry: AutomationLogEntry): AutomationPreviewRow {
   }
 }
 
+function addSheetRequest(
+  requests: Array<{ range: string; values: SheetValues }>,
+  sheetName: string,
+  range: string,
+  values: SheetValues,
+) {
+  requests.push({
+    range: range.replace(quoteSheetName('PLACEHOLDER'), quoteSheetName(sheetName)),
+    values,
+  })
+}
+
 async function assertCanRun(req: Request) {
   const supabaseUrl = Deno.env.get('SUPABASE_URL')
   const anonKey = Deno.env.get('SUPABASE_ANON_KEY') || Deno.env.get('SUPABASE_PUBLISHABLE_KEY')
@@ -1313,6 +1328,117 @@ async function runAutomation(req: Request): Promise<AutomationResult> {
   let notFound = 0
   let errors = 0
   let matched = 0
+  let nextRowNumber = values.length + 1
+
+  const processMatchedRow = async (
+    row: SheetClientRow,
+    pdfRecord: PreparedPdfRecord,
+    options: { created: boolean },
+  ) => {
+    matched += 1
+    matchedPdfRecordKeys.add(pdfRecord.recordKey)
+
+    const sources = new Set<string>()
+    setIfMissing(sources, 'PDF')
+
+    const integra = await integraService.lookupClient(row.clientName)
+    if (integra.found) setIfMissing(sources, 'Integra')
+
+    const trello = await trelloService.searchClientCard(row.clientName)
+    if (trello.found) setIfMissing(sources, 'Trello')
+
+    const errorParts = [integra.error, trello.error].filter(Boolean) as string[]
+    const dueDate = normalizeDate(integra.dueDate || pdfRecord.dueDate || '')
+    const amount = integra.amount ?? pdfRecord.amount ?? null
+    const description = integra.description || String(pdfRecord.description || '').trim()
+    const status = deriveFinancialStatus(
+      dueDate,
+      integra.status,
+      amount,
+      integra.openAmount,
+      integra.paidAmount,
+      integra.upcomingAmount,
+    )
+    const amounts = deriveAmounts(dueDate, status, amount, integra)
+    const updatePlan = buildUpdatePlan(
+      row,
+      targetColumns,
+      timestamp,
+      executionDate,
+      [...sources],
+      errorParts.join(' | '),
+      status,
+      dueDate,
+      description,
+      amount,
+      amounts.openAmount,
+      amounts.paidAmount,
+      amounts.upcomingAmount,
+      trello,
+    )
+
+    if (options.created) {
+      updated += 1
+      addSheetRequest(
+        updateRequests,
+        sheetName,
+        `${quoteSheetName('PLACEHOLDER')}!${columnLetter(SHEET_CLIENT_COLUMN_INDEX)}${row.rowNumber}`,
+        [[row.clientName]],
+      )
+      updatePlan.requests.forEach((request) => {
+        addSheetRequest(updateRequests, sheetName, request.range, request.values)
+      })
+    } else if (updatePlan.action === 'atualizado') {
+      updated += 1
+      updatePlan.requests.forEach((request) => {
+        addSheetRequest(updateRequests, sheetName, request.range, request.values)
+      })
+    } else if (updatePlan.action === 'data_atualizada') {
+      refreshed += 1
+      updatePlan.requests.forEach((request) => {
+        addSheetRequest(updateRequests, sheetName, request.range, request.values)
+      })
+    } else {
+      ignored += 1
+    }
+
+    if (errorParts.length > 0) {
+      errors += 1
+    }
+
+    if (options.created || updatePlan.action === 'atualizado' || updatePlan.action === 'data_atualizada') {
+      const changedLabels = options.created
+        ? ['CLIENTE', ...updatePlan.changedColumnLabels]
+        : updatePlan.changedColumnLabels
+
+      logEntries.push({
+        timestamp,
+        rowNumber: row.rowNumber,
+        clientName: row.clientName,
+        status: errorParts.length > 0
+          ? 'erro_parcial'
+          : options.created
+            ? 'cliente_adicionado_na_planilha'
+            : status || 'processado',
+        action: options.created ? 'cliente_adicionado' : updatePlan.action,
+        sources: [...sources],
+        errorMessage: errorParts.join(' | '),
+        details: [
+          options.created ? `Nova linha criada na planilha: ${row.rowNumber}` : null,
+          changedLabels.length > 0 ? `Colunas alteradas: ${changedLabels.join(', ')}` : null,
+          !options.created && updatePlan.action === 'data_atualizada'
+            ? 'Sem mudança de conteúdo; apenas data da atualização foi renovada.'
+            : null,
+          body.pdfFileName ? `PDF: ${body.pdfFileName}` : null,
+          trello.resultLabel ? `Trello: ${trello.resultLabel}` : null,
+          dueDate ? `Vencimento: ${dueDate}` : null,
+        ]
+          .filter(Boolean)
+          .join(' | '),
+        cardUrl: trello.cardUrl,
+      })
+    }
+  }
 
   for (const row of sheetRows) {
     const pdfRecord = resolvePdfRecordForRow(row, pdfIndex, matchedPdfRecordKeys)
@@ -1320,6 +1446,9 @@ async function runAutomation(req: Request): Promise<AutomationResult> {
       ignored += 1
       continue
     }
+
+    await processMatchedRow(row, pdfRecord, { created: false })
+    continue
 
     matched += 1
     matchedPdfRecordKeys.add(pdfRecord.recordKey)
@@ -1416,6 +1545,21 @@ async function runAutomation(req: Request): Promise<AutomationResult> {
 
   for (const pdfRecord of pdfIndex.records) {
     if (matchedPdfRecordKeys.has(pdfRecord.recordKey)) continue
+
+    const newRowValues = createEmptyRow(Math.max(headers.length, TARGET_END_COLUMN_INDEX))
+    newRowValues[SHEET_CLIENT_COLUMN_INDEX - 1] = pdfRecord.name
+
+    const newRow: SheetClientRow = {
+      rowNumber: nextRowNumber,
+      clientName: pdfRecord.name,
+      normalizedName: normalizeClientName(pdfRecord.name),
+      values: newRowValues,
+    }
+
+    nextRowNumber += 1
+    await processMatchedRow(newRow, pdfRecord, { created: true })
+    continue
+
     notFound += 1
     logEntries.push({
       timestamp,
@@ -1436,6 +1580,20 @@ async function runAutomation(req: Request): Promise<AutomationResult> {
     })
   }
 
+  if (dryRun) {
+    logEntries.push({
+      timestamp,
+      rowNumber: null,
+      clientName: body.pdfFileName || 'PDF',
+      status: 'pre_visualizacao',
+      action: 'dry_run',
+      sources: [],
+      errorMessage: '',
+      details: 'Prévia executada sem gravar alterações na aba principal. DATA DA ATUALIZAÇÃO só muda em execução real.',
+      cardUrl: '',
+    })
+  }
+
   let updateFailureMessage = ''
   if (!dryRun && updateRequests.length > 0) {
     try {
@@ -1451,7 +1609,7 @@ async function runAutomation(req: Request): Promise<AutomationResult> {
         action: 'erro_atualizacao',
         sources: [],
         errorMessage: updateFailureMessage,
-        details: 'A escrita nas colunas R:AF falhou depois do processamento dos clientes.',
+        details: 'A escrita na planilha falhou depois do processamento dos clientes.',
         cardUrl: '',
       })
     }
@@ -1493,7 +1651,7 @@ async function runAutomation(req: Request): Promise<AutomationResult> {
     errors,
     updatedCells: dryRun ? 0 : updateRequests.length,
     logRows: logEntries.length,
-    preview: logEntries.slice(0, PREVIEW_LIMIT).map(buildPreviewRow),
+    preview: logEntries.map(buildPreviewRow),
   }
 }
 

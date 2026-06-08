@@ -162,10 +162,14 @@ function formatActionLabel(action: string) {
   switch (action) {
     case 'atualizado':
       return 'Atualizado';
+    case 'cliente_adicionado':
+      return 'Cliente adicionado';
     case 'data_atualizada':
       return 'Data atualizada';
     case 'nao_encontrado':
       return 'Não encontrado';
+    case 'dry_run':
+      return 'Prévia';
     case 'erro_global':
       return 'Erro global';
     default:
@@ -279,7 +283,7 @@ export default function Automacao() {
             <p className="text-xs font-semibold uppercase tracking-[0.34em] text-slate-300">Automação PDF + Integra + Trello</p>
             <div className="space-y-3">
               <h1 className="max-w-3xl text-3xl font-semibold tracking-tight sm:text-4xl">
-                Atualize somente as colunas R até AF a partir do nome da coluna I.
+                Atualize e complete a planilha a partir do nome da coluna I.
               </h1>
               <p className="max-w-2xl text-sm leading-6 text-slate-300">
                 A execução cruza o PDF enviado com a planilha, consulta Integra e Trello quando disponíveis, compara os dados
@@ -300,7 +304,7 @@ export default function Automacao() {
             <div className="rounded-2xl border border-white/10 bg-white/5 p-4 sm:col-span-2">
               <p className="text-xs uppercase tracking-[0.18em] text-slate-300">Segurança</p>
               <p className="mt-2 text-sm leading-6 text-slate-300">
-                A automação mantém o foco no intervalo R:AF e preserva todas as colunas anteriores da planilha.
+                A automação atualiza clientes existentes e também cria novas linhas quando o cliente vier no PDF e ainda não existir na planilha.
               </p>
             </div>
           </div>
@@ -437,7 +441,7 @@ export default function Automacao() {
             <div>
               <CardTitle className="text-lg">Prévia da última execução</CardTitle>
               <p className="mt-1 text-sm text-muted-foreground">
-                Mostra as primeiras linhas registradas no LOG_AUTOMACAO para conferência rápida.
+                Mostra todas as linhas registradas nesta execução para conferência rápida.
               </p>
             </div>
             {lastResult ? (
