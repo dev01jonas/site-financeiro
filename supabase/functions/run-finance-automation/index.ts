@@ -593,7 +593,7 @@ class GoogleSheetsService {
   }
 
   async getSheetProperties(sheetName: string) {
-    const metadata = await this.request('?fields=sheets.properties(sheetId,title,gridProperties.columnCount)')
+    const metadata = await this.request('?fields=sheets.properties(sheetId,title,gridProperties.columnCount,gridProperties.rowCount)')
     const sheet = (metadata.sheets || []).find(
       (item: { properties?: { title?: string } }) => item.properties?.title === sheetName,
     )
@@ -605,6 +605,7 @@ class GoogleSheetsService {
     return {
       sheetId: sheet.properties.sheetId as number,
       columnCount: Number(sheet.properties.gridProperties?.columnCount || 0),
+      rowCount: Number(sheet.properties.gridProperties?.rowCount || 0),
     }
   }
 
@@ -621,6 +622,26 @@ class GoogleSheetsService {
               sheetId,
               dimension: 'COLUMNS',
               length: minColumnCount - columnCount,
+            },
+          },
+        ],
+      }),
+    })
+  }
+
+  async ensureRowCapacity(sheetName: string, minRowCount: number) {
+    const { sheetId, rowCount } = await this.getSheetProperties(sheetName)
+    if (rowCount >= minRowCount) return
+
+    await this.request(':batchUpdate', {
+      method: 'POST',
+      body: JSON.stringify({
+        requests: [
+          {
+            appendDimension: {
+              sheetId,
+              dimension: 'ROWS',
+              length: minRowCount - rowCount,
             },
           },
         ],
@@ -1367,6 +1388,7 @@ async function runAutomation(req: Request): Promise<AutomationResult> {
     let matched = 0
     let notFound = 0
     let nextRowNumber = sheetValues.length + 1
+    let maxRequestedRow = candidateRows.length > 0 ? Math.max(...candidateRows.map((row) => row.rowNumber)) : startRow
 
     for (const pdfRecord of pdfIndex.records) {
       try {
@@ -1381,6 +1403,7 @@ async function runAutomation(req: Request): Promise<AutomationResult> {
 
         if (!matchedRow) {
           workingRow.values[SHEET_CLIENT_COLUMN_INDEX - 1] = pdfRecord.name
+          maxRequestedRow = Math.max(maxRequestedRow, workingRow.rowNumber)
           nextRowNumber += 1
         } else {
           usedRowNumbers.add(matchedRow.rowNumber)
@@ -1524,6 +1547,7 @@ async function runAutomation(req: Request): Promise<AutomationResult> {
     let updateFailureMessage = ''
     if (!dryRun && updateRequests.length > 0) {
       try {
+        await sheets.ensureRowCapacity(sheetName, maxRequestedRow)
         await sheets.batchUpdateValues(updateRequests)
       } catch (error) {
         updateFailureMessage = `Falha ao atualizar Google Sheets: ${error instanceof Error ? error.message : 'erro desconhecido'}`
