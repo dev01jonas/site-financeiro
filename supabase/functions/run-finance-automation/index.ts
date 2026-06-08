@@ -1333,6 +1333,245 @@ async function runAutomation(req: Request): Promise<AutomationResult> {
     throw new Error('PDF não encontrado ou sem registros válidos para processar.')
   }
 
+  {
+    const sheetValues = await sheets.readSheetValues(sheetName)
+    if (sheetValues.length < 2) {
+      throw new Error(`A aba ${sheetName} nao possui linhas suficientes.`)
+    }
+
+    const sheetHeaders = sheetValues[0] || []
+    const targetColumns = describeTargetColumns(sheetHeaders)
+    const { rows: candidateRows, skipped: skippedRows } = buildSheetClientRows(sheetValues, startRow, maxRows)
+    const sheetLookup = buildSheetRowLookup(candidateRows)
+    const pdfIndex = buildPdfRecordIndex(pdfRecords)
+    const usedRowNumbers = new Set<number>()
+    const integraEnabled = Boolean(Deno.env.get('INTEGRA_API_URL'))
+    const integraService = new IntegraService()
+    const trelloService = new TrelloService(
+      Deno.env.get('TRELLO_API_KEY'),
+      Deno.env.get('TRELLO_TOKEN'),
+      Deno.env.get('TRELLO_BOARD_ID') || null,
+      (Deno.env.get('TRELLO_LIST_IDS') || '')
+        .split(',')
+        .map((value) => value.trim())
+        .filter(Boolean),
+    )
+
+    const timestamp = buildTimestamp()
+    const executionDate = buildCurrentDate()
+    const logEntries: AutomationLogEntry[] = []
+    const updateRequests: Array<{ range: string; values: SheetValues }> = []
+    let updated = 0
+    let refreshed = 0
+    let errors = 0
+    let matched = 0
+    let notFound = 0
+    let nextRowNumber = sheetValues.length + 1
+
+    for (const pdfRecord of pdfIndex.records) {
+      try {
+        const matchedRow = resolveSheetRowForPdfRecord(pdfRecord, sheetLookup, usedRowNumbers)
+        const isCreated = !matchedRow
+        const workingRow: SheetClientRow = matchedRow || {
+          rowNumber: nextRowNumber,
+          clientName: pdfRecord.name,
+          normalizedName: normalizeClientName(pdfRecord.name),
+          values: createEmptyRow(Math.max(sheetHeaders.length, TARGET_END_COLUMN_INDEX)),
+        }
+
+        if (!matchedRow) {
+          workingRow.values[SHEET_CLIENT_COLUMN_INDEX - 1] = pdfRecord.name
+          nextRowNumber += 1
+        } else {
+          usedRowNumbers.add(matchedRow.rowNumber)
+        }
+
+        matched += 1
+
+        const sources = new Set<string>()
+        setIfMissing(sources, 'PDF')
+
+        const integra = integraEnabled
+          ? await integraService.lookupClient(workingRow.clientName)
+          : {
+              found: false,
+              status: '',
+              dueDate: '',
+              amount: null,
+              openAmount: null,
+              paidAmount: null,
+              upcomingAmount: null,
+              description: '',
+            }
+
+        if (integra.found) setIfMissing(sources, 'Integra')
+
+        const trello = await trelloService.searchClientCard(workingRow.clientName)
+        if (trello.found) setIfMissing(sources, 'Trello')
+
+        const errorParts = [integra.error, trello.error].filter(Boolean) as string[]
+        const dueDate = normalizeDate(integra.dueDate || pdfRecord.dueDate || '')
+        const amount = integra.amount ?? pdfRecord.amount ?? null
+        const description = integra.description || String(pdfRecord.description || '').trim()
+        const status = deriveFinancialStatus(
+          dueDate,
+          integra.status,
+          amount,
+          integra.openAmount,
+          integra.paidAmount,
+          integra.upcomingAmount,
+        )
+        const amounts = deriveAmounts(dueDate, status, amount, integra)
+        const updatePlan = buildUpdatePlan(
+          workingRow,
+          targetColumns,
+          timestamp,
+          executionDate,
+          [...sources],
+          errorParts.join(' | '),
+          status,
+          dueDate,
+          description,
+          amount,
+          amounts.openAmount,
+          amounts.paidAmount,
+          amounts.upcomingAmount,
+          trello,
+        )
+
+        if (isCreated) {
+          updated += 1
+          addSheetRequest(
+            updateRequests,
+            sheetName,
+            `${quoteSheetName('PLACEHOLDER')}!${columnLetter(SHEET_CLIENT_COLUMN_INDEX)}${workingRow.rowNumber}`,
+            [[workingRow.clientName]],
+          )
+          updatePlan.requests.forEach((request) => {
+            addSheetRequest(updateRequests, sheetName, request.range, request.values)
+          })
+        } else if (updatePlan.action === 'atualizado') {
+          updated += 1
+          updatePlan.requests.forEach((request) => {
+            addSheetRequest(updateRequests, sheetName, request.range, request.values)
+          })
+        } else if (updatePlan.action === 'data_atualizada') {
+          refreshed += 1
+          updatePlan.requests.forEach((request) => {
+            addSheetRequest(updateRequests, sheetName, request.range, request.values)
+          })
+        }
+
+        if (errorParts.length > 0) {
+          errors += 1
+        }
+
+        if (isCreated || updatePlan.action === 'atualizado' || updatePlan.action === 'data_atualizada') {
+          const changedLabels = isCreated
+            ? ['CLIENTE', ...updatePlan.changedColumnLabels]
+            : updatePlan.changedColumnLabels
+
+          logEntries.push({
+            timestamp,
+            rowNumber: workingRow.rowNumber,
+            clientName: workingRow.clientName,
+            status: errorParts.length > 0
+              ? 'erro_parcial'
+              : isCreated
+                ? 'cliente_adicionado_na_planilha'
+                : status || 'processado',
+            action: isCreated ? 'cliente_adicionado' : updatePlan.action,
+            sources: [...sources],
+            errorMessage: errorParts.join(' | '),
+            details: [
+              isCreated ? `Nova linha criada na planilha: ${workingRow.rowNumber}` : null,
+              changedLabels.length > 0 ? `Colunas alteradas: ${changedLabels.join(', ')}` : null,
+              !isCreated && updatePlan.action === 'data_atualizada'
+                ? 'Sem mudança de conteúdo; apenas data da atualização foi renovada.'
+                : null,
+              body.pdfFileName ? `PDF: ${body.pdfFileName}` : null,
+              trello.resultLabel ? `Trello: ${trello.resultLabel}` : null,
+              dueDate ? `Vencimento: ${dueDate}` : null,
+            ]
+              .filter(Boolean)
+              .join(' | '),
+            cardUrl: trello.cardUrl,
+          })
+        }
+      } catch (error) {
+        notFound += 1
+        errors += 1
+        logEntries.push({
+          timestamp,
+          rowNumber: null,
+          clientName: pdfRecord.name,
+          status: 'erro_no_processamento',
+          action: 'nao_encontrado',
+          sources: ['PDF'],
+          errorMessage: error instanceof Error ? error.message : 'Falha ao processar cliente do PDF.',
+          details: [
+            body.pdfFileName ? `PDF: ${body.pdfFileName}` : null,
+            pdfRecord.dueDate ? `Vencimento: ${normalizeDate(pdfRecord.dueDate)}` : null,
+            typeof pdfRecord.amount === 'number' ? `Valor: ${formatCurrency(pdfRecord.amount)}` : null,
+          ]
+            .filter(Boolean)
+            .join(' | '),
+          cardUrl: '',
+        })
+      }
+    }
+
+    let updateFailureMessage = ''
+    if (!dryRun && updateRequests.length > 0) {
+      try {
+        await sheets.batchUpdateValues(updateRequests)
+      } catch (error) {
+        updateFailureMessage = `Falha ao atualizar Google Sheets: ${error instanceof Error ? error.message : 'erro desconhecido'}`
+        errors += 1
+        logEntries.push({
+          timestamp,
+          rowNumber: null,
+          clientName: sheetName,
+          status: 'erro_google_sheets',
+          action: 'erro_atualizacao',
+          sources: [],
+          errorMessage: updateFailureMessage,
+          details: 'A escrita na planilha falhou depois do processamento dos clientes.',
+          cardUrl: '',
+        })
+      }
+    }
+
+    await sheets.appendLogRows(logEntries.map(buildLogRow))
+    await sheets.batchUpdateValues([
+      {
+        range: `${quoteSheetName(LOG_SHEET_NAME)}!K1:O8`,
+        values: Array.from({ length: 8 }, () => Array.from({ length: 5 }, () => '')),
+      },
+    ])
+
+    if (updateFailureMessage) {
+      throw new Error(updateFailureMessage)
+    }
+
+    return {
+      dryRun,
+      sheetName,
+      startRow,
+      processed: candidateRows.length,
+      skipped: skippedRows,
+      matched,
+      updated,
+      refreshed,
+      ignored: Math.max(candidateRows.length - usedRowNumbers.size, 0),
+      notFound,
+      errors,
+      updatedCells: dryRun ? 0 : updateRequests.length,
+      logRows: logEntries.length,
+      preview: logEntries.map(buildPreviewRow),
+    }
+  }
+
   const values = await sheets.readSheetValues(sheetName)
   if (values.length < 2) {
     throw new Error(`A aba ${sheetName} nao possui linhas suficientes.`)
