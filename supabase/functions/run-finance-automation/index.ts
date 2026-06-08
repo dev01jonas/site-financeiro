@@ -687,33 +687,11 @@ class GoogleSheetsService {
         range: `${quoteSheetName(LOG_SHEET_NAME)}!A1:I1`,
         values: [['Data/hora', 'Linha', 'Cliente', 'Status', 'Ação', 'Origens', 'Mensagem de erro', 'Detalhes', 'Card Trello']],
       },
-      {
-        range: `${quoteSheetName(LOG_SHEET_NAME)}!K1:N8`,
-        values: [
-          ['DASHBOARD LOG_AUTOMACAO', '', '', ''],
-          ['Última execução', '-', 'Modo', '-'],
-          ['Aba', '-', 'PDF', '-'],
-          ['Linhas lidas', '0', 'Ignoradas', '0'],
-          ['Clientes com match', '0', 'Não encontrados', '0'],
-          ['Atualizados', '0', 'Só data', '0'],
-          ['Erros', '0', 'Logs gravados', '0'],
-          ['Status da gravação', '-', '', ''],
-        ],
-      },
     ])
   }
 
-  async updateLogDashboard(summary: LogDashboardSummary) {
-    await this.updateValues(`${quoteSheetName(LOG_SHEET_NAME)}!K1:N8`, [
-      ['DASHBOARD LOG_AUTOMACAO', '', '', ''],
-      ['Última execução', summary.timestamp, 'Modo', summary.dryRun ? 'Teste' : 'Execução'],
-      ['Aba', summary.sheetName, 'PDF', summary.pdfFileName || '-'],
-      ['Linhas lidas', String(summary.processed), 'Ignoradas', String(summary.skipped)],
-      ['Clientes com match', String(summary.matched), 'Não encontrados', String(summary.notFound)],
-      ['Atualizados', String(summary.updated), 'Só data', String(summary.refreshed)],
-      ['Erros', String(summary.errors), 'Logs gravados', String(summary.logRows)],
-      ['Status da gravação', summary.writeStatus, '', ''],
-    ])
+  async updateLogDashboard(_summary: LogDashboardSummary) {
+    return
   }
 
   async updateValues(range: string, values: SheetValues) {
@@ -752,6 +730,7 @@ class TrelloService {
   boardId: string | null
   listIds: Set<string>
   listNameCache = new Map<string, string>()
+  clientLookupCache = new Map<string, Promise<TrelloLookupResult>>()
   baseUrl = 'https://api.trello.com/1'
 
   constructor(apiKey: string | null, token: string | null, boardId: string | null, listIds: string[]) {
@@ -783,6 +762,18 @@ class TrelloService {
   }
 
   async searchClientCard(clientName: string): Promise<TrelloLookupResult> {
+    const cacheKey = normalizeClientName(clientName)
+    const cached = this.clientLookupCache.get(cacheKey)
+    if (cached) {
+      return cached
+    }
+
+    const lookupPromise = this.searchClientCardInternal(clientName)
+    this.clientLookupCache.set(cacheKey, lookupPromise)
+    return lookupPromise
+  }
+
+  async searchClientCardInternal(clientName: string): Promise<TrelloLookupResult> {
     if (!this.isConfigured()) {
       return {
         found: false,
@@ -807,13 +798,12 @@ class TrelloService {
         }
       }
 
-      const detail = await this.getCardDetail(selected.id)
       return {
         found: true,
         resultLabel: 'Localizado no Trello',
-        situation: await this.summarizeSituation(detail),
-        actionDate: extractActionDate(detail),
-        cardUrl: detail.shortUrl || detail.url || '',
+        situation: await this.summarizeSituation(selected),
+        actionDate: extractActionDate(selected),
+        cardUrl: selected.shortUrl || selected.url || '',
       }
     } catch (error) {
       return {
@@ -860,14 +850,6 @@ class TrelloService {
     }
 
     return cards.sort((a, b) => score(b) - score(a))[0]
-  }
-
-  async getCardDetail(cardId: string): Promise<TrelloCard> {
-    return this.get(`/cards/${cardId}`, {
-      fields: 'name,desc,idList,shortUrl,url,due,dateLastActivity,labels',
-      actions: 'commentCard,updateCard:idList',
-      actions_limit: '40',
-    })
   }
 
   async getListName(listId?: string) {
@@ -1581,12 +1563,6 @@ async function runAutomation(req: Request): Promise<AutomationResult> {
     }
 
     await sheets.appendLogRows(logEntries.map(buildLogRow))
-    await sheets.batchUpdateValues([
-      {
-        range: `${quoteSheetName(LOG_SHEET_NAME)}!K1:O8`,
-        values: Array.from({ length: 8 }, () => Array.from({ length: 5 }, () => '')),
-      },
-    ])
 
     if (updateFailureMessage) {
       throw new Error(updateFailureMessage)
@@ -1929,35 +1905,6 @@ async function runAutomation(req: Request): Promise<AutomationResult> {
   }
 
   await sheets.appendLogRows(logEntries.map(buildLogRow))
-  await sheets.batchUpdateValues([
-    {
-      range: `${quoteSheetName(LOG_SHEET_NAME)}!K1:O8`,
-      values: Array.from({ length: 8 }, () => Array.from({ length: 5 }, () => '')),
-    },
-  ])
-
-  await sheets.updateLogDashboard({
-    timestamp,
-    dryRun,
-    sheetName,
-    pdfFileName: body.pdfFileName || '',
-    processed: sheetRows.length,
-    skipped,
-    matched,
-    updated,
-    refreshed,
-    notFound,
-    errors,
-    logRows: logEntries.length,
-    writeStatus: updateFailureMessage ? 'Falha na gravação' : dryRun ? 'Prévia sem gravação' : 'Gravação realizada',
-  })
-
-  await sheets.batchUpdateValues([
-    {
-      range: `${quoteSheetName(LOG_SHEET_NAME)}!K1:O8`,
-      values: Array.from({ length: 8 }, () => Array.from({ length: 5 }, () => '')),
-    },
-  ])
 
   if (updateFailureMessage) {
     throw new Error(updateFailureMessage)
