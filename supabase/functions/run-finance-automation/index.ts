@@ -1114,6 +1114,7 @@ function buildUpdatePlan(
   const changedColumns = new Set<number>()
   const dateColumns: number[] = []
   const newValues = new Map<number, string>()
+  const changedColumnLabels: string[] = []
 
   for (const column of columns) {
     if (!column.role) continue
@@ -1156,6 +1157,11 @@ function buildUpdatePlan(
     dateColumns.forEach((index) => updateColumns.add(index))
   }
 
+  for (const column of columns) {
+    if (!changedColumns.has(column.index)) continue
+    changedColumnLabels.push(column.header || columnLetter(column.index))
+  }
+
   const requests = [...updateColumns].map((columnIndex) => ({
     range: `${quoteSheetName('PLACEHOLDER')}!${columnLetter(columnIndex)}${row.rowNumber}`,
     values: [[newValues.get(columnIndex) || '']],
@@ -1164,6 +1170,7 @@ function buildUpdatePlan(
   return {
     action,
     changedCount: requests.length,
+    changedColumnLabels,
     requests,
   }
 }
@@ -1390,6 +1397,12 @@ async function runAutomation(req: Request): Promise<AutomationResult> {
         sources: [...sources],
         errorMessage: errorParts.join(' | '),
         details: [
+          updatePlan.action === 'atualizado' && updatePlan.changedColumnLabels.length > 0
+            ? `Colunas alteradas: ${updatePlan.changedColumnLabels.join(', ')}`
+            : null,
+          updatePlan.action === 'data_atualizada'
+            ? 'Sem mudança de conteúdo; apenas data da atualização foi renovada.'
+            : null,
           body.pdfFileName ? `PDF: ${body.pdfFileName}` : null,
           trello.resultLabel ? `Trello: ${trello.resultLabel}` : null,
           dueDate ? `Vencimento: ${dueDate}` : null,
@@ -1404,6 +1417,23 @@ async function runAutomation(req: Request): Promise<AutomationResult> {
   for (const pdfRecord of pdfIndex.records) {
     if (matchedPdfRecordKeys.has(pdfRecord.recordKey)) continue
     notFound += 1
+    logEntries.push({
+      timestamp,
+      rowNumber: null,
+      clientName: pdfRecord.name,
+      status: 'cliente_nao_encontrado_na_planilha',
+      action: 'nao_encontrado',
+      sources: ['PDF'],
+      errorMessage: 'Cliente do PDF não foi localizado na coluna I da planilha.',
+      details: [
+        body.pdfFileName ? `PDF: ${body.pdfFileName}` : null,
+        pdfRecord.dueDate ? `Vencimento: ${normalizeDate(pdfRecord.dueDate)}` : null,
+        typeof pdfRecord.amount === 'number' ? `Valor: ${formatCurrency(pdfRecord.amount)}` : null,
+      ]
+        .filter(Boolean)
+        .join(' | '),
+      cardUrl: '',
+    })
   }
 
   let updateFailureMessage = ''
