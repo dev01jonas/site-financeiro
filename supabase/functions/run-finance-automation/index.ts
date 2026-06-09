@@ -8,6 +8,7 @@ const corsHeaders = {
 const GOOGLE_SCOPE = 'https://www.googleapis.com/auth/spreadsheets'
 const LOG_SHEET_NAME = 'LOG_AUTOMACAO'
 const SHEET_CLIENT_COLUMN_INDEX = 9
+const SHEET_TOTAL_VALUE_COLUMN_INDEX = 11
 const TARGET_START_COLUMN_INDEX = 1 // A
 const TARGET_END_COLUMN_INDEX = 32 // AF
 const MONTH_NAMES = [
@@ -436,7 +437,6 @@ function resolveColumnRole(header: string): ColumnRole | null {
 
   if (normalized === 'DATA') return 'fillDate'
   if (['VENCIMENTO', 'DATA_DE_VENCIMENTO', 'DT_VENCIMENTO'].includes(normalized)) return 'dueDate'
-  if (['VALOR', 'VALOR_TOTAL', 'TOTAL'].includes(normalized)) return 'amount'
   if (['DESCRICAO', 'DESCRICAO_DA_PARCELA', 'PARCELA'].includes(normalized)) return 'description'
   if (['FINANCEIRO', 'STATUS_FINANCEIRO'].includes(normalized)) return 'financialStatus'
   if (normalized === 'STATUS') return 'recordStatus'
@@ -1072,6 +1072,45 @@ function extractActionDate(card: TrelloCard) {
   }
 }
 
+function extractInstallmentNumber(description: string) {
+  const match = String(description || '').match(/\b(\d{1,3})\s*(?:a|ª|o)?\s*parcela\b/i)
+  if (!match) return null
+
+  const installmentNumber = Number(match[1])
+  return Number.isFinite(installmentNumber) && installmentNumber > 0 ? installmentNumber : null
+}
+
+function deriveInstallmentAmounts(
+  totalAmount: number | null,
+  installmentNumber: number | null,
+  parcelAmount: number | null,
+  status: string,
+) {
+  if (totalAmount === null || installmentNumber === null || parcelAmount === null) {
+    return null
+  }
+
+  const safeTotal = Math.max(totalAmount, 0)
+  const safeParcel = Math.max(parcelAmount, 0)
+  const paidBase = Math.min(Math.max((installmentNumber - 1) * safeParcel, 0), safeTotal)
+
+  if (status === 'QUITADO') {
+    return { openAmount: 0, paidAmount: safeTotal, upcomingAmount: 0 }
+  }
+
+  if (status === 'EM ATRASO') {
+    const openAmount = Math.min(safeParcel, Math.max(safeTotal - paidBase, 0))
+    const upcomingAmount = Math.max(safeTotal - paidBase - openAmount, 0)
+    return { openAmount, paidAmount: paidBase, upcomingAmount }
+  }
+
+  return {
+    openAmount: 0,
+    paidAmount: paidBase,
+    upcomingAmount: Math.max(safeTotal - paidBase, 0),
+  }
+}
+
 function deriveFinancialStatus(
   dueDate: string,
   integraStatus: string,
@@ -1093,9 +1132,11 @@ function deriveFinancialStatus(
 }
 
 function deriveAmounts(
+  row: SheetClientRow,
   dueDate: string,
   status: string,
   amount: number | null,
+  description: string,
   integra: IntegraLookupResult,
 ) {
   const parsedAmount = amount && Number.isFinite(amount) ? amount : null
@@ -1109,6 +1150,13 @@ function deriveAmounts(
       paidAmount,
       upcomingAmount,
     }
+  }
+
+  const totalFromSheet = parseAmount(getCell(row.values, SHEET_TOTAL_VALUE_COLUMN_INDEX))
+  const installmentNumber = extractInstallmentNumber(description)
+  const installmentAmounts = deriveInstallmentAmounts(totalFromSheet, installmentNumber, parsedAmount, status)
+  if (installmentAmounts) {
+    return installmentAmounts
   }
 
   if (parsedAmount === null) {
@@ -1511,7 +1559,7 @@ async function runAutomation(req: Request): Promise<AutomationResult> {
           integra.paidAmount,
           integra.upcomingAmount,
         )
-        const amounts = deriveAmounts(dueDate, status, amount, integra)
+        const amounts = deriveAmounts(workingRow, dueDate, status, amount, description, integra)
         const updatePlan = buildUpdatePlan(
           workingRow,
           targetColumns,
@@ -1719,7 +1767,7 @@ async function runAutomation(req: Request): Promise<AutomationResult> {
       integra.paidAmount,
       integra.upcomingAmount,
     )
-    const amounts = deriveAmounts(dueDate, status, amount, integra)
+    const amounts = deriveAmounts(row, dueDate, status, amount, description, integra)
     const updatePlan = buildUpdatePlan(
       row,
       targetColumns,
@@ -1834,7 +1882,7 @@ async function runAutomation(req: Request): Promise<AutomationResult> {
       integra.paidAmount,
       integra.upcomingAmount,
     )
-    const amounts = deriveAmounts(dueDate, status, amount, integra)
+    const amounts = deriveAmounts(row, dueDate, status, amount, description, integra)
     const updatePlan = buildUpdatePlan(
       row,
       targetColumns,
