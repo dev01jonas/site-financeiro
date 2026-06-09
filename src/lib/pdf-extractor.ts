@@ -124,7 +124,9 @@ function isLikelyClientName(line: string) {
   if (!normalized || normalized.length < 4) return false;
   if (comparable.length < 4) return false;
   if (/\b\d{2}\/\d{2}\/\d{4}\b/.test(normalized)) return false;
-  if (/^descricao:/i.test(comparable)) return false;
+  if (/^descricao\b/i.test(comparable)) return false;
+  if (/\bvalor\b/i.test(comparable) && /\bparcela\b/i.test(comparable)) return false;
+  if (normalized.includes(':')) return false;
 
   const blockedHeaders = [
     'total',
@@ -140,13 +142,14 @@ function isLikelyClientName(line: string) {
     'forma de pgmto',
     'pgmto',
     'status',
+    'descricao',
   ];
 
   if (blockedHeaders.some((header) => comparable === header || comparable.startsWith(`${header} `))) {
     return false;
   }
 
-  if (/(honorarios|pix|vencido|centro de receita|processo adm|aguardando numeracao)/i.test(comparable)) {
+  if (/(honorarios|pix|vencido|centro de receita|processo adm|aguardando numeracao|interposicao de recurso|atuacao extrajudicial|parcela|valor)/i.test(comparable)) {
     return false;
   }
 

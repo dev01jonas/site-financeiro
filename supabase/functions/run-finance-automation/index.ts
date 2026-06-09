@@ -266,6 +266,16 @@ function resolveStatusOption(...values: Array<unknown>) {
   return 'ATIVA'
 }
 
+function isInvalidPdfClientName(value: unknown) {
+  const normalized = normalizeLooseText(value)
+  if (!normalized) return true
+  if (normalized.startsWith('descricao')) return true
+  if (normalized.includes('valor') && normalized.includes('parcela')) return true
+  if (normalized.includes('atuacao extrajudicial')) return true
+  if (normalized.includes('interposicao de recurso')) return true
+  return false
+}
+
 function isTruncatedClientName(value: unknown) {
   return /\s*(?:\.{3}|…)\s*$/.test(String(value || ''))
 }
@@ -498,6 +508,7 @@ function buildPdfRecordIndex(pdfRecords: PdfRecord[]) {
   const exactLookup = new Map<string, PreparedPdfRecord[]>()
 
   for (const [index, record] of pdfRecords.entries()) {
+    if (isInvalidPdfClientName(record.name)) continue
     const normalizedName = normalizeClientName(record.name)
     if (!normalizedName) continue
 
@@ -851,7 +862,7 @@ class TrelloService {
         return {
           found: false,
           resultLabel: 'Nao localizado no Trello',
-          situation: 'Nao localizado no Trello',
+          situation: '',
           statusLabel: 'ATIVA',
           actionDate: '',
           cardUrl: '',
