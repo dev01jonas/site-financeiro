@@ -7,11 +7,11 @@ const corsHeaders = {
 
 const GOOGLE_SCOPE = 'https://www.googleapis.com/auth/spreadsheets'
 const LOG_SHEET_NAME = 'LOG_AUTOMACAO'
-const VALUE_SOURCE_SHEET_NAME = 'Prospecção (PRD)'
 const SHEET_CLIENT_COLUMN_INDEX = 9
 const SHEET_TOTAL_VALUE_COLUMN_INDEX = 11
 const TARGET_START_COLUMN_INDEX = 1 // A
 const TARGET_END_COLUMN_INDEX = 32 // AF
+const DEFAULT_VALUE_SOURCE_SHEET_NAME = 'Clientes(V1)'
 const MONTH_NAMES = [
   'JANEIRO',
   'FEVEREIRO',
@@ -515,6 +515,29 @@ function buildSheetAmountLookup(rows: SheetClientRow[]) {
   }
 
   return lookup
+}
+
+async function loadValueSourceRows(
+  accessToken: string,
+  currentSpreadsheetId: string,
+  currentSheetName: string,
+  currentValues: SheetValues,
+) {
+  const sourceSpreadsheetId = Deno.env.get('GOOGLE_VALUE_SOURCE_SPREADSHEET_ID') || currentSpreadsheetId
+  const sourceSheetName = Deno.env.get('GOOGLE_VALUE_SOURCE_SHEET_NAME') || DEFAULT_VALUE_SOURCE_SHEET_NAME
+
+  const sourceService =
+    sourceSpreadsheetId === currentSpreadsheetId
+      ? null
+      : new GoogleSheetsService(sourceSpreadsheetId, accessToken)
+
+  const sourceValues =
+    !sourceService && currentSheetName === sourceSheetName
+      ? currentValues
+      : await (sourceService || new GoogleSheetsService(currentSpreadsheetId, accessToken)).readSheetValues(sourceSheetName)
+
+  const { rows } = buildSheetClientRows(sourceValues, 2, 0)
+  return buildSheetAmountLookup(rows)
 }
 
 function buildPdfRecordIndex(pdfRecords: PdfRecord[]) {
@@ -1488,14 +1511,11 @@ async function runAutomation(req: Request): Promise<AutomationResult> {
     if (sheetValues.length < 2) {
       throw new Error(`A aba ${sheetName} nao possui linhas suficientes.`)
     }
-    const valueSourceValues =
-      sheetName === VALUE_SOURCE_SHEET_NAME ? sheetValues : await sheets.readSheetValues(VALUE_SOURCE_SHEET_NAME)
 
     const sheetHeaders = sheetValues[0] || []
     const targetColumns = describeTargetColumns(sheetHeaders)
     const { rows: candidateRows, skipped: skippedRows } = buildSheetClientRows(sheetValues, startRow, maxRows)
-    const { rows: valueSourceRows } = buildSheetClientRows(valueSourceValues, 2, 0)
-    const valueAmountLookup = buildSheetAmountLookup(valueSourceRows)
+    const valueAmountLookup = await loadValueSourceRows(accessToken, spreadsheetId, sheetName, sheetValues)
     const sheetLookup = buildSheetRowLookup(candidateRows)
     const pdfIndex = buildPdfRecordIndex(pdfRecords)
     const usedRowNumbers = new Set<number>()
@@ -1735,10 +1755,7 @@ async function runAutomation(req: Request): Promise<AutomationResult> {
   const headers = values[0] || []
   const targetColumns = describeTargetColumns(headers)
   const { rows: sheetRows, skipped } = buildSheetClientRows(values, startRow, maxRows)
-  const valueSourceValues =
-    sheetName === VALUE_SOURCE_SHEET_NAME ? values : await sheets.readSheetValues(VALUE_SOURCE_SHEET_NAME)
-  const { rows: valueSourceRows } = buildSheetClientRows(valueSourceValues, 2, 0)
-  const valueAmountLookup = buildSheetAmountLookup(valueSourceRows)
+  const valueAmountLookup = await loadValueSourceRows(accessToken, spreadsheetId, sheetName, values)
   const pdfIndex = buildPdfRecordIndex(pdfRecords)
   const matchedPdfRecordKeys = new Set<string>()
   const integraService = new IntegraService()
