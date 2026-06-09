@@ -95,6 +95,7 @@ type TrelloLookupResult = {
   found: boolean
   resultLabel: string
   situation: string
+  statusLabel: string
   actionDate: string
   cardUrl: string
   error?: string
@@ -251,6 +252,18 @@ function resolveReguaOption(...values: Array<unknown>) {
   }
 
   return ''
+}
+
+function resolveStatusOption(...values: Array<unknown>) {
+  const normalizedValues = values
+    .map((value) => normalizeLooseText(value))
+    .filter(Boolean)
+
+  if (normalizedValues.some((value) => value.includes('inativa') || value.includes('inativo'))) {
+    return 'INATIVA'
+  }
+
+  return 'ATIVA'
 }
 
 function isTruncatedClientName(value: unknown) {
@@ -824,6 +837,7 @@ class TrelloService {
         found: false,
         resultLabel: 'Trello nao configurado',
         situation: '',
+        statusLabel: 'ATIVA',
         actionDate: '',
         cardUrl: '',
         error: 'Falha na consulta ao Trello: integracao nao configurada.',
@@ -838,15 +852,19 @@ class TrelloService {
           found: false,
           resultLabel: 'Nao localizado no Trello',
           situation: 'Nao localizado no Trello',
+          statusLabel: 'ATIVA',
           actionDate: '',
           cardUrl: '',
         }
       }
 
+      const listName = await this.getListName(selected.idList)
+      const labels = (selected.labels || []).map((label) => label.name).filter(Boolean)
       return {
         found: true,
         resultLabel: 'Localizado no Trello',
         situation: await this.summarizeSituation(selected),
+        statusLabel: resolveStatusOption(listName, ...labels, selected.name, selected.desc),
         actionDate: extractActionDate(selected),
         cardUrl: selected.shortUrl || selected.url || '',
       }
@@ -855,6 +873,7 @@ class TrelloService {
         found: false,
         resultLabel: 'Erro ao consultar Trello',
         situation: '',
+        statusLabel: 'ATIVA',
         actionDate: '',
         cardUrl: '',
         error: `Falha na consulta ao Trello: ${error instanceof Error ? error.message : 'erro desconhecido'}`,
@@ -866,7 +885,7 @@ class TrelloService {
     const params: Record<string, string> = {
       query: clientName,
       modelTypes: 'cards',
-      card_fields: 'name,desc,idBoard,idList,shortUrl,url,due,dateLastActivity,closed',
+      card_fields: 'name,desc,idBoard,idList,shortUrl,url,due,dateLastActivity,closed,labels',
       cards_limit: '20',
     }
     if (this.boardId) params.idBoards = this.boardId
@@ -1093,10 +1112,8 @@ function deriveAmounts(
   return { openAmount: 0, paidAmount: 0, upcomingAmount: parsedAmount }
 }
 
-function deriveRecordStatus(status: string, openAmount: number | null, upcomingAmount: number | null) {
-  if (status === 'QUITADO') return 'INATIVO'
-  if ((openAmount || 0) > 0 || (upcomingAmount || 0) > 0) return 'ATIVO'
-  return ''
+function deriveRecordStatus(trello: TrelloLookupResult) {
+  return trello.statusLabel || 'ATIVA'
 }
 
 function computeColumnValue(
@@ -1126,7 +1143,7 @@ function computeColumnValue(
     case 'financialStatus':
       return status
     case 'recordStatus':
-      return deriveRecordStatus(status, openAmount, upcomingAmount)
+      return deriveRecordStatus(trello)
     case 'openAmount':
       return formatCurrency(openAmount)
     case 'paidAmount':
