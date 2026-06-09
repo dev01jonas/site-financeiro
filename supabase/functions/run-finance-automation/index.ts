@@ -505,16 +505,43 @@ function findLastFilledRow(values: SheetValues) {
   return 1
 }
 
+type SheetAmountEntry = {
+  normalizedName: string
+  amount: number
+}
+
 function buildSheetAmountLookup(rows: SheetClientRow[]) {
-  const lookup = new Map<string, number>()
+  const exactLookup = new Map<string, number>()
+  const entries: SheetAmountEntry[] = []
 
   for (const row of rows) {
     const amount = parseAmount(getCell(row.values, SHEET_TOTAL_VALUE_COLUMN_INDEX))
     if (amount === null) continue
-    lookup.set(row.normalizedName, amount)
+    exactLookup.set(row.normalizedName, amount)
+    entries.push({
+      normalizedName: row.normalizedName,
+      amount,
+    })
   }
 
-  return lookup
+  return { exactLookup, entries }
+}
+
+function resolveAmountForClient(
+  lookup: ReturnType<typeof buildSheetAmountLookup>,
+  normalizedClientName: string,
+) {
+  const exact = lookup.exactLookup.get(normalizedClientName)
+  if (exact !== undefined) return exact
+
+  const truncatedMatch = lookup.entries.find((entry) =>
+    canMatchTruncatedName(entry.normalizedName, normalizedClientName) ||
+    canMatchTruncatedName(normalizedClientName, entry.normalizedName) ||
+    entry.normalizedName.startsWith(normalizedClientName) ||
+    normalizedClientName.startsWith(entry.normalizedName),
+  )
+
+  return truncatedMatch?.amount ?? null
 }
 
 async function loadValueSourceRows(
@@ -1594,7 +1621,7 @@ async function runAutomation(req: Request): Promise<AutomationResult> {
 
         const errorParts = [integra.error, trello.error].filter(Boolean) as string[]
         const dueDate = normalizeDate(integra.dueDate || pdfRecord.dueDate || '')
-        const totalAmount = valueAmountLookup.get(workingRow.normalizedName) ?? parseAmount(getCell(workingRow.values, SHEET_TOTAL_VALUE_COLUMN_INDEX))
+        const totalAmount = resolveAmountForClient(valueAmountLookup, workingRow.normalizedName) ?? parseAmount(getCell(workingRow.values, SHEET_TOTAL_VALUE_COLUMN_INDEX))
         const amount = integra.amount ?? pdfRecord.amount ?? null
         const description = integra.description || String(pdfRecord.description || '').trim()
         const status = deriveFinancialStatus(
@@ -1815,7 +1842,7 @@ async function runAutomation(req: Request): Promise<AutomationResult> {
       integra.paidAmount,
       integra.upcomingAmount,
     )
-    const totalAmount = valueAmountLookup.get(row.normalizedName) ?? parseAmount(getCell(row.values, SHEET_TOTAL_VALUE_COLUMN_INDEX))
+    const totalAmount = resolveAmountForClient(valueAmountLookup, row.normalizedName) ?? parseAmount(getCell(row.values, SHEET_TOTAL_VALUE_COLUMN_INDEX))
     const amounts = deriveAmounts(totalAmount, dueDate, status, amount, description, integra)
     const updatePlan = buildUpdatePlan(
       row,
@@ -1932,7 +1959,7 @@ async function runAutomation(req: Request): Promise<AutomationResult> {
       integra.paidAmount,
       integra.upcomingAmount,
     )
-    const totalAmount = valueAmountLookup.get(row.normalizedName) ?? parseAmount(getCell(row.values, SHEET_TOTAL_VALUE_COLUMN_INDEX))
+    const totalAmount = resolveAmountForClient(valueAmountLookup, row.normalizedName) ?? parseAmount(getCell(row.values, SHEET_TOTAL_VALUE_COLUMN_INDEX))
     const amounts = deriveAmounts(totalAmount, dueDate, status, amount, description, integra)
     const updatePlan = buildUpdatePlan(
       row,
