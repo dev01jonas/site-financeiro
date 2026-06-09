@@ -25,6 +25,28 @@ const MONTH_NAMES = [
   'NOVEMBRO',
   'DEZEMBRO',
 ]
+const REGUA_OPTIONS = [
+  'Aviso de Inadimplência',
+  'Lembrete de Atraso',
+  'Negociação',
+  'Rescisão',
+  'Notificação',
+  'PENDENTE',
+  'Execução',
+  'Pago',
+  'Renegociado',
+]
+const REGUA_MATCHERS: Array<{ value: string; terms: string[] }> = [
+  { value: 'Aviso de Inadimplência', terms: ['aviso de inadimplencia'] },
+  { value: 'Lembrete de Atraso', terms: ['lembrete de atraso'] },
+  { value: 'Negociação', terms: ['negociacao'] },
+  { value: 'Rescisão', terms: ['rescisao'] },
+  { value: 'Notificação', terms: ['notificacao'] },
+  { value: 'PENDENTE', terms: ['pendente'] },
+  { value: 'Execução', terms: ['execucao'] },
+  { value: 'Pago', terms: ['pago', 'quitado'] },
+  { value: 'Renegociado', terms: ['renegociado', 'renegociacao'] },
+]
 
 type SheetValues = string[][]
 type AutomationBody = {
@@ -195,6 +217,15 @@ function normalizeHeader(value: unknown) {
     .toUpperCase()
 }
 
+function normalizeLooseText(value: unknown) {
+  return String(value || '')
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
 function normalizeClientName(value: unknown) {
   return String(value || '')
     .replace(/\s+/g, ' ')
@@ -206,6 +237,20 @@ function normalizeClientName(value: unknown) {
     .replace(/[\u0300-\u036f]/g, '')
     .replace(/[^a-z0-9]+/g, ' ')
     .trim()
+}
+
+function resolveReguaOption(...values: Array<unknown>) {
+  const normalizedValues = values
+    .map((value) => normalizeLooseText(value))
+    .filter(Boolean)
+
+  for (const matcher of REGUA_MATCHERS) {
+    if (normalizedValues.some((value) => matcher.terms.some((term) => value.includes(term)))) {
+      return matcher.value
+    }
+  }
+
+  return ''
 }
 
 function isTruncatedClientName(value: unknown) {
@@ -864,16 +909,10 @@ class TrelloService {
 
   async summarizeSituation(card: TrelloCard) {
     const listName = await this.getListName(card.idList)
-    if (listName) return listName
-
     const labels = (card.labels || []).map((label) => label.name).filter(Boolean)
-    if (labels.length > 0) return labels.join(', ')
-
     const latestComment = (card.actions || []).find((action) => action.type === 'commentCard')?.data?.text
-    if (latestComment) return latestComment.replace(/\s+/g, ' ').trim()
-
-    if (card.due) return new Date(card.due).toLocaleDateString('pt-BR')
-
+    const regua = resolveReguaOption(listName, ...labels, latestComment, card.name, card.desc)
+    if (regua && REGUA_OPTIONS.includes(regua)) return regua
     return ''
   }
 }
