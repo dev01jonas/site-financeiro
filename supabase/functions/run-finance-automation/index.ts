@@ -756,6 +756,10 @@ class GoogleSheetsService {
         range: `${quoteSheetName(LOG_SHEET_NAME)}!A1:I1`,
         values: [['Data/hora', 'Linha', 'Cliente', 'Status', 'Ação', 'Origens', 'Mensagem de erro', 'Detalhes', 'Card Trello']],
       },
+      {
+        range: `${quoteSheetName(LOG_SHEET_NAME)}!K1:O20`,
+        values: Array.from({ length: 20 }, () => Array.from({ length: 5 }, () => '')),
+      },
     ])
   }
 
