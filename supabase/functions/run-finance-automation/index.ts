@@ -7,6 +7,7 @@ const corsHeaders = {
 
 const GOOGLE_SCOPE = 'https://www.googleapis.com/auth/spreadsheets'
 const LOG_SHEET_NAME = 'LOG_AUTOMACAO'
+const VALUE_SOURCE_SHEET_NAME = 'Prospecção (PRD)'
 const SHEET_CLIENT_COLUMN_INDEX = 9
 const SHEET_TOTAL_VALUE_COLUMN_INDEX = 11
 const TARGET_START_COLUMN_INDEX = 1 // A
@@ -437,6 +438,7 @@ function resolveColumnRole(header: string): ColumnRole | null {
 
   if (normalized === 'DATA') return 'fillDate'
   if (['VENCIMENTO', 'DATA_DE_VENCIMENTO', 'DT_VENCIMENTO'].includes(normalized)) return 'dueDate'
+  if (['VALOR', 'VALOR_TOTAL', 'TOTAL'].includes(normalized)) return 'amount'
   if (['DESCRICAO', 'DESCRICAO_DA_PARCELA', 'PARCELA'].includes(normalized)) return 'description'
   if (['FINANCEIRO', 'STATUS_FINANCEIRO'].includes(normalized)) return 'financialStatus'
   if (normalized === 'STATUS') return 'recordStatus'
@@ -501,6 +503,18 @@ function findLastFilledRow(values: SheetValues) {
   }
 
   return 1
+}
+
+function buildSheetAmountLookup(rows: SheetClientRow[]) {
+  const lookup = new Map<string, number>()
+
+  for (const row of rows) {
+    const amount = parseAmount(getCell(row.values, SHEET_TOTAL_VALUE_COLUMN_INDEX))
+    if (amount === null) continue
+    lookup.set(row.normalizedName, amount)
+  }
+
+  return lookup
 }
 
 function buildPdfRecordIndex(pdfRecords: PdfRecord[]) {
@@ -1132,7 +1146,7 @@ function deriveFinancialStatus(
 }
 
 function deriveAmounts(
-  row: SheetClientRow,
+  totalAmount: number | null,
   dueDate: string,
   status: string,
   amount: number | null,
@@ -1152,9 +1166,8 @@ function deriveAmounts(
     }
   }
 
-  const totalFromSheet = parseAmount(getCell(row.values, SHEET_TOTAL_VALUE_COLUMN_INDEX))
   const installmentNumber = extractInstallmentNumber(description)
-  const installmentAmounts = deriveInstallmentAmounts(totalFromSheet, installmentNumber, parsedAmount, status)
+  const installmentAmounts = deriveInstallmentAmounts(totalAmount, installmentNumber, parsedAmount, status)
   if (installmentAmounts) {
     return installmentAmounts
   }
@@ -1188,6 +1201,7 @@ function computeColumnValue(
   status: string,
   dueDate: string,
   description: string,
+  totalAmount: number | null,
   amount: number | null,
   openAmount: number | null,
   paidAmount: number | null,
@@ -1200,7 +1214,7 @@ function computeColumnValue(
     case 'dueDate':
       return dueDate
     case 'amount':
-      return formatCurrency(amount)
+      return formatCurrency(totalAmount)
     case 'description':
       return description
     case 'financialStatus':
@@ -1242,6 +1256,7 @@ function buildUpdatePlan(
   status: string,
   dueDate: string,
   description: string,
+  totalAmount: number | null,
   amount: number | null,
   openAmount: number | null,
   paidAmount: number | null,
@@ -1264,6 +1279,7 @@ function buildUpdatePlan(
       status,
       dueDate,
       description,
+      totalAmount,
       amount,
       openAmount,
       paidAmount,
@@ -1472,10 +1488,14 @@ async function runAutomation(req: Request): Promise<AutomationResult> {
     if (sheetValues.length < 2) {
       throw new Error(`A aba ${sheetName} nao possui linhas suficientes.`)
     }
+    const valueSourceValues =
+      sheetName === VALUE_SOURCE_SHEET_NAME ? sheetValues : await sheets.readSheetValues(VALUE_SOURCE_SHEET_NAME)
 
     const sheetHeaders = sheetValues[0] || []
     const targetColumns = describeTargetColumns(sheetHeaders)
     const { rows: candidateRows, skipped: skippedRows } = buildSheetClientRows(sheetValues, startRow, maxRows)
+    const { rows: valueSourceRows } = buildSheetClientRows(valueSourceValues, 2, 0)
+    const valueAmountLookup = buildSheetAmountLookup(valueSourceRows)
     const sheetLookup = buildSheetRowLookup(candidateRows)
     const pdfIndex = buildPdfRecordIndex(pdfRecords)
     const usedRowNumbers = new Set<number>()
@@ -1549,6 +1569,7 @@ async function runAutomation(req: Request): Promise<AutomationResult> {
 
         const errorParts = [integra.error, trello.error].filter(Boolean) as string[]
         const dueDate = normalizeDate(integra.dueDate || pdfRecord.dueDate || '')
+        const totalAmount = valueAmountLookup.get(workingRow.normalizedName) ?? parseAmount(getCell(workingRow.values, SHEET_TOTAL_VALUE_COLUMN_INDEX))
         const amount = integra.amount ?? pdfRecord.amount ?? null
         const description = integra.description || String(pdfRecord.description || '').trim()
         const status = deriveFinancialStatus(
@@ -1559,7 +1580,7 @@ async function runAutomation(req: Request): Promise<AutomationResult> {
           integra.paidAmount,
           integra.upcomingAmount,
         )
-        const amounts = deriveAmounts(workingRow, dueDate, status, amount, description, integra)
+        const amounts = deriveAmounts(totalAmount, dueDate, status, amount, description, integra)
         const updatePlan = buildUpdatePlan(
           workingRow,
           targetColumns,
@@ -1570,6 +1591,7 @@ async function runAutomation(req: Request): Promise<AutomationResult> {
           status,
           dueDate,
           description,
+          totalAmount,
           amount,
           amounts.openAmount,
           amounts.paidAmount,
@@ -1713,6 +1735,10 @@ async function runAutomation(req: Request): Promise<AutomationResult> {
   const headers = values[0] || []
   const targetColumns = describeTargetColumns(headers)
   const { rows: sheetRows, skipped } = buildSheetClientRows(values, startRow, maxRows)
+  const valueSourceValues =
+    sheetName === VALUE_SOURCE_SHEET_NAME ? values : await sheets.readSheetValues(VALUE_SOURCE_SHEET_NAME)
+  const { rows: valueSourceRows } = buildSheetClientRows(valueSourceValues, 2, 0)
+  const valueAmountLookup = buildSheetAmountLookup(valueSourceRows)
   const pdfIndex = buildPdfRecordIndex(pdfRecords)
   const matchedPdfRecordKeys = new Set<string>()
   const integraService = new IntegraService()
@@ -1767,7 +1793,8 @@ async function runAutomation(req: Request): Promise<AutomationResult> {
       integra.paidAmount,
       integra.upcomingAmount,
     )
-    const amounts = deriveAmounts(row, dueDate, status, amount, description, integra)
+    const totalAmount = valueAmountLookup.get(row.normalizedName) ?? parseAmount(getCell(row.values, SHEET_TOTAL_VALUE_COLUMN_INDEX))
+    const amounts = deriveAmounts(totalAmount, dueDate, status, amount, description, integra)
     const updatePlan = buildUpdatePlan(
       row,
       targetColumns,
@@ -1778,6 +1805,7 @@ async function runAutomation(req: Request): Promise<AutomationResult> {
       status,
       dueDate,
       description,
+      totalAmount,
       amount,
       amounts.openAmount,
       amounts.paidAmount,
@@ -1882,7 +1910,8 @@ async function runAutomation(req: Request): Promise<AutomationResult> {
       integra.paidAmount,
       integra.upcomingAmount,
     )
-    const amounts = deriveAmounts(row, dueDate, status, amount, description, integra)
+    const totalAmount = valueAmountLookup.get(row.normalizedName) ?? parseAmount(getCell(row.values, SHEET_TOTAL_VALUE_COLUMN_INDEX))
+    const amounts = deriveAmounts(totalAmount, dueDate, status, amount, description, integra)
     const updatePlan = buildUpdatePlan(
       row,
       targetColumns,
@@ -1893,6 +1922,7 @@ async function runAutomation(req: Request): Promise<AutomationResult> {
       status,
       dueDate,
       description,
+      totalAmount,
       amount,
       amounts.openAmount,
       amounts.paidAmount,
