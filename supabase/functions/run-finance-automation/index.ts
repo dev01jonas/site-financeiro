@@ -823,13 +823,18 @@ class GoogleSheetsService {
   }
 
   async appendLogRows(rows: SheetValues) {
+    await this.request('/values:batchClear', {
+      method: 'POST',
+      body: JSON.stringify({
+        ranges: [`${quoteSheetName(LOG_SHEET_NAME)}!A2:I5000`],
+      }),
+    })
+
     if (rows.length === 0) return
-    await this.request(
-      `/values/${encodeURIComponent(`${quoteSheetName(LOG_SHEET_NAME)}!A:I`)}:append?valueInputOption=USER_ENTERED&insertDataOption=INSERT_ROWS`,
-      {
-        method: 'POST',
-        body: JSON.stringify({ values: rows }),
-      },
+
+    await this.updateValues(
+      `${quoteSheetName(LOG_SHEET_NAME)}!A2:I${rows.length + 1}`,
+      rows,
     )
   }
 }
