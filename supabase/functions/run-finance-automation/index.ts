@@ -508,31 +508,37 @@ function findLastFilledRow(values: SheetValues) {
 type SheetAmountEntry = {
   normalizedName: string
   amount: number
+  date: string
 }
 
 function buildSheetAmountLookup(rows: SheetClientRow[]) {
-  const exactLookup = new Map<string, number>()
+  const exactLookup = new Map<string, SheetAmountEntry>()
   const entries: SheetAmountEntry[] = []
 
   for (const row of rows) {
     const amount = parseAmount(getCell(row.values, SHEET_TOTAL_VALUE_COLUMN_INDEX))
-    if (amount === null) continue
-    exactLookup.set(row.normalizedName, amount)
-    entries.push({
+    const date = normalizeDate(getCell(row.values, 1))
+    if (amount === null && !date) continue
+
+    const entry = {
       normalizedName: row.normalizedName,
-      amount,
-    })
+      amount: amount ?? 0,
+      date,
+    }
+
+    exactLookup.set(row.normalizedName, entry)
+    entries.push(entry)
   }
 
   return { exactLookup, entries }
 }
 
-function resolveAmountForClient(
+function resolveSourceForClient(
   lookup: ReturnType<typeof buildSheetAmountLookup>,
   normalizedClientName: string,
 ) {
   const exact = lookup.exactLookup.get(normalizedClientName)
-  if (exact !== undefined) return exact
+  if (exact) return exact
 
   const truncatedMatch = lookup.entries.find((entry) =>
     canMatchTruncatedName(entry.normalizedName, normalizedClientName) ||
@@ -541,7 +547,7 @@ function resolveAmountForClient(
     normalizedClientName.startsWith(entry.normalizedName),
   )
 
-  return truncatedMatch?.amount ?? null
+  return truncatedMatch || null
 }
 
 async function loadValueSourceRows(
@@ -1251,6 +1257,7 @@ function computeColumnValue(
   column: TargetColumn,
   timestamp: string,
   executionDate: string,
+  sourceDate: string,
   sources: string[],
   errorMessage: string,
   status: string,
@@ -1265,7 +1272,7 @@ function computeColumnValue(
 ) {
   switch (column.role) {
     case 'fillDate':
-      return executionDate
+      return sourceDate
     case 'dueDate':
       return dueDate
     case 'amount':
@@ -1306,6 +1313,7 @@ function buildUpdatePlan(
   columns: TargetColumn[],
   timestamp: string,
   executionDate: string,
+  sourceDate: string,
   sources: string[],
   errorMessage: string,
   status: string,
@@ -1329,6 +1337,7 @@ function buildUpdatePlan(
       column,
       timestamp,
       executionDate,
+      sourceDate,
       sources,
       errorMessage,
       status,
@@ -1621,7 +1630,9 @@ async function runAutomation(req: Request): Promise<AutomationResult> {
 
         const errorParts = [integra.error, trello.error].filter(Boolean) as string[]
         const dueDate = normalizeDate(integra.dueDate || pdfRecord.dueDate || '')
-        const totalAmount = resolveAmountForClient(valueAmountLookup, workingRow.normalizedName) ?? parseAmount(getCell(workingRow.values, SHEET_TOTAL_VALUE_COLUMN_INDEX))
+        const sourceEntry = resolveSourceForClient(valueAmountLookup, workingRow.normalizedName)
+        const sourceDate = sourceEntry?.date || getCell(workingRow.values, 1)
+        const totalAmount = sourceEntry?.amount ?? parseAmount(getCell(workingRow.values, SHEET_TOTAL_VALUE_COLUMN_INDEX))
         const amount = integra.amount ?? pdfRecord.amount ?? null
         const description = integra.description || String(pdfRecord.description || '').trim()
         const status = deriveFinancialStatus(
@@ -1638,6 +1649,7 @@ async function runAutomation(req: Request): Promise<AutomationResult> {
           targetColumns,
           timestamp,
           executionDate,
+          sourceDate,
           [...sources],
           errorParts.join(' | '),
           status,
@@ -1842,13 +1854,16 @@ async function runAutomation(req: Request): Promise<AutomationResult> {
       integra.paidAmount,
       integra.upcomingAmount,
     )
-    const totalAmount = resolveAmountForClient(valueAmountLookup, row.normalizedName) ?? parseAmount(getCell(row.values, SHEET_TOTAL_VALUE_COLUMN_INDEX))
+    const sourceEntry = resolveSourceForClient(valueAmountLookup, row.normalizedName)
+    const sourceDate = sourceEntry?.date || getCell(row.values, 1)
+    const totalAmount = sourceEntry?.amount ?? parseAmount(getCell(row.values, SHEET_TOTAL_VALUE_COLUMN_INDEX))
     const amounts = deriveAmounts(totalAmount, dueDate, status, amount, description, integra)
     const updatePlan = buildUpdatePlan(
       row,
       targetColumns,
       timestamp,
       executionDate,
+      sourceDate,
       [...sources],
       errorParts.join(' | '),
       status,
@@ -1959,13 +1974,16 @@ async function runAutomation(req: Request): Promise<AutomationResult> {
       integra.paidAmount,
       integra.upcomingAmount,
     )
-    const totalAmount = resolveAmountForClient(valueAmountLookup, row.normalizedName) ?? parseAmount(getCell(row.values, SHEET_TOTAL_VALUE_COLUMN_INDEX))
+    const sourceEntry = resolveSourceForClient(valueAmountLookup, row.normalizedName)
+    const sourceDate = sourceEntry?.date || getCell(row.values, 1)
+    const totalAmount = sourceEntry?.amount ?? parseAmount(getCell(row.values, SHEET_TOTAL_VALUE_COLUMN_INDEX))
     const amounts = deriveAmounts(totalAmount, dueDate, status, amount, description, integra)
     const updatePlan = buildUpdatePlan(
       row,
       targetColumns,
       timestamp,
       executionDate,
+      sourceDate,
       [...sources],
       errorParts.join(' | '),
       status,
