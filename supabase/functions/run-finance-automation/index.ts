@@ -262,10 +262,10 @@ function resolveStatusOption(...values: Array<unknown>) {
     .filter(Boolean)
 
   if (normalizedValues.some((value) => value.includes('inativa') || value.includes('inativo'))) {
-    return 'INATIVA'
+    return 'INATIVO'
   }
 
-  return 'ATIVA'
+  return 'ATIVO'
 }
 
 function isInvalidPdfClientName(value: unknown) {
@@ -921,7 +921,7 @@ class TrelloService {
         found: false,
         resultLabel: 'Trello nao configurado',
         situation: '',
-        statusLabel: 'ATIVA',
+        statusLabel: 'ATIVO',
         actionDate: '',
         cardUrl: '',
         error: 'Falha na consulta ao Trello: integracao nao configurada.',
@@ -936,7 +936,7 @@ class TrelloService {
           found: false,
           resultLabel: 'Nao localizado no Trello',
           situation: '',
-          statusLabel: 'ATIVA',
+          statusLabel: 'ATIVO',
           actionDate: '',
           cardUrl: '',
         }
@@ -957,7 +957,7 @@ class TrelloService {
         found: false,
         resultLabel: 'Erro ao consultar Trello',
         situation: '',
-        statusLabel: 'ATIVA',
+        statusLabel: 'ATIVO',
         actionDate: '',
         cardUrl: '',
         error: `Falha na consulta ao Trello: ${error instanceof Error ? error.message : 'erro desconhecido'}`,
@@ -1244,7 +1244,7 @@ function deriveAmounts(
 }
 
 function deriveRecordStatus(trello: TrelloLookupResult) {
-  return trello.statusLabel || 'ATIVA'
+  return trello.statusLabel || 'ATIVO'
 }
 
 function computeColumnValue(
