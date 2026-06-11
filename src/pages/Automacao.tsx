@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { useMutation } from '@tanstack/react-query';
 import {
   AlertTriangle,
@@ -22,6 +22,9 @@ import { Switch } from '@/components/ui/switch';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { useToast } from '@/hooks/use-toast';
 import { extractBillingRecords, type ExtractedRecord } from '@/lib/pdf-extractor';
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
+import { ScrollArea } from '@/components/ui/scroll-area';
 
 type AutomationPreviewRow = {
   rowNumber: number | null;
@@ -48,6 +51,32 @@ type AutomationResult = {
   updatedCells: number;
   logRows: number;
   preview: AutomationPreviewRow[];
+  pendingCount: number;
+  pendingSelections: PendingProcessSelection[];
+};
+
+type ProcessOption = {
+  selectionId: string;
+  rowNumber: number;
+  clientName: string;
+  code: string;
+  serviceCode: string;
+  process: string;
+  matter: string;
+  amount: number | null;
+  dueDay: string;
+  financialStatus: string;
+  contractDate: string;
+};
+
+type PendingProcessSelection = {
+  recordKey: string;
+  clientName: string;
+  pdfDueDate: string;
+  pdfAmount: number | null;
+  pdfDescription: string;
+  suggestedSelectionId: string;
+  options: ProcessOption[];
 };
 
 function getErrorMessage(error: unknown) {
@@ -107,6 +136,7 @@ async function runAutomationRequest(payload: {
   sheetName?: string;
   pdfFileName?: string;
   pdfRecords: ExtractedRecord[];
+  selectedProcessMatches?: Record<string, string>;
 }) {
   const invokeResult = await supabase.functions.invoke<AutomationResult>('run-finance-automation', {
     body: payload,
@@ -187,6 +217,9 @@ export default function Automacao() {
   const [pdfRecords, setPdfRecords] = useState<ExtractedRecord[]>([]);
   const [pdfLoading, setPdfLoading] = useState(false);
   const [lastResult, setLastResult] = useState<AutomationResult | null>(null);
+  const [pendingSelections, setPendingSelections] = useState<PendingProcessSelection[]>([]);
+  const [processSelectionDialogOpen, setProcessSelectionDialogOpen] = useState(false);
+  const [selectedProcessMatches, setSelectedProcessMatches] = useState<Record<string, string>>({});
 
   const handlePdfSelection = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
@@ -216,7 +249,7 @@ export default function Automacao() {
   };
 
   const automationMutation = useMutation({
-    mutationFn: async () => {
+    mutationFn: async (selectedMatches: Record<string, string> = {}) => {
       if (pdfRecords.length === 0) {
         throw new Error('Selecione um PDF válido antes de executar a automação.');
       }
@@ -228,12 +261,32 @@ export default function Automacao() {
         sheetName: sheetName.trim() || undefined,
         pdfFileName: pdfFileName || undefined,
         pdfRecords,
+        selectedProcessMatches: selectedMatches,
       };
 
       return runAutomationRequest(payload);
     },
     onSuccess: (data) => {
       setLastResult(data);
+      if (data.pendingSelections.length > 0) {
+        const suggestedMatches = Object.fromEntries(
+          data.pendingSelections
+            .filter((selection) => selection.suggestedSelectionId)
+            .map((selection) => [selection.recordKey, selection.suggestedSelectionId]),
+        );
+
+        setPendingSelections(data.pendingSelections);
+        setSelectedProcessMatches(suggestedMatches);
+        setProcessSelectionDialogOpen(true);
+        toast({
+          title: 'Escolha o processo correto',
+          description: `${data.pendingSelections.length} cliente(s) precisam de confirmação antes do preenchimento.`,
+        });
+        return;
+      }
+
+      setPendingSelections([]);
+      setProcessSelectionDialogOpen(false);
       toast({
         title: data.dryRun ? 'Teste concluído' : 'Planilha atualizada',
         description: `${data.matched} cliente(s) com match no PDF, ${data.updated + data.refreshed} linha(s) tratada(s).`,
@@ -247,6 +300,11 @@ export default function Automacao() {
       });
     },
   });
+
+  const allPendingSelectionsFilled = useMemo(
+    () => pendingSelections.every((selection) => Boolean(selectedProcessMatches[selection.recordKey])),
+    [pendingSelections, selectedProcessMatches],
+  );
 
   const summaryCards = [
     {
@@ -264,7 +322,7 @@ export default function Automacao() {
     {
       title: 'Não encontrados',
       value: lastResult?.notFound ?? '-',
-      subtitle: 'Clientes do PDF sem linha correspondente',
+      subtitle: lastResult?.pendingCount ? `${lastResult.pendingCount} aguardando seleção` : 'Clientes do PDF sem linha correspondente',
       icon: AlertTriangle,
     },
     {
@@ -400,7 +458,7 @@ export default function Automacao() {
               type="button"
               className="h-11 w-full rounded-xl bg-[linear-gradient(135deg,hsl(var(--primary)),hsl(216_48%_34%))]"
               disabled={automationMutation.isPending || pdfLoading}
-              onClick={() => automationMutation.mutate()}
+              onClick={() => automationMutation.mutate({})}
             >
               {automationMutation.isPending ? (
                 <>
@@ -514,6 +572,88 @@ export default function Automacao() {
           </div>
         </CardContent>
       </Card>
+
+      <Dialog open={processSelectionDialogOpen} onOpenChange={setProcessSelectionDialogOpen}>
+        <DialogContent className="max-w-4xl border-border/70 bg-card/95 shadow-[0_24px_80px_rgba(15,23,42,0.18)]">
+          <DialogHeader>
+            <DialogTitle>Escolha o processo correto</DialogTitle>
+            <DialogDescription>
+              Quando houver mais de um processo para o mesmo cliente, selecione a opção correta para concluir o preenchimento.
+            </DialogDescription>
+          </DialogHeader>
+
+          <ScrollArea className="max-h-[70vh] pr-4">
+            <div className="space-y-6">
+              {pendingSelections.map((selection) => (
+                <div key={selection.recordKey} className="space-y-3 rounded-2xl border border-border/70 p-4">
+                  <div className="space-y-1">
+                    <p className="text-base font-semibold">{selection.clientName}</p>
+                    <p className="text-xs text-muted-foreground">
+                      PDF: {selection.pdfDescription || 'Sem descrição'}
+                      {selection.pdfAmount !== null
+                        ? ` | Parcela: ${selection.pdfAmount.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}`
+                        : ''}
+                      {selection.pdfDueDate ? ` | Vencimento: ${selection.pdfDueDate}` : ''}
+                    </p>
+                  </div>
+
+                  <RadioGroup
+                    value={selectedProcessMatches[selection.recordKey] || ''}
+                    onValueChange={(value) =>
+                      setSelectedProcessMatches((current) => ({
+                        ...current,
+                        [selection.recordKey]: value,
+                      }))
+                    }
+                    className="space-y-3"
+                  >
+                    {selection.options.map((option) => (
+                      <label
+                        key={option.selectionId}
+                        className="flex cursor-pointer items-start gap-3 rounded-xl border border-border/70 p-3 transition-colors hover:border-primary/50"
+                      >
+                        <RadioGroupItem value={option.selectionId} className="mt-1" />
+                        <div className="space-y-2">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <Badge variant="outline">{option.code || 'Sem COD-CL'}</Badge>
+                            {option.serviceCode ? <Badge variant="secondary">{option.serviceCode}</Badge> : null}
+                            {selection.suggestedSelectionId === option.selectionId ? <Badge>Sugestão</Badge> : null}
+                          </div>
+                          <p className="text-sm font-medium">{option.process || 'Processo não informado'}</p>
+                          <div className="flex flex-wrap gap-4 text-xs text-muted-foreground">
+                            <span>Matéria: {option.matter || '-'}</span>
+                            <span>
+                              Valor:{' '}
+                              {option.amount !== null
+                                ? option.amount.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })
+                                : '-'}
+                            </span>
+                            <span>Venc.: {option.dueDay || '-'}</span>
+                            <span>Financeiro: {option.financialStatus || '-'}</span>
+                          </div>
+                        </div>
+                      </label>
+                    ))}
+                  </RadioGroup>
+                </div>
+              ))}
+            </div>
+          </ScrollArea>
+
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={() => setProcessSelectionDialogOpen(false)}>
+              Revisar depois
+            </Button>
+            <Button
+              type="button"
+              disabled={!allPendingSelectionsFilled || automationMutation.isPending}
+              onClick={() => automationMutation.mutate(selectedProcessMatches)}
+            >
+              Confirmar e preencher
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

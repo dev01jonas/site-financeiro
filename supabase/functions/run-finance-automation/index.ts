@@ -58,6 +58,7 @@ type AutomationBody = {
   sheetName?: string
   pdfFileName?: string
   pdfRecords?: PdfRecord[]
+  selectedProcessMatches?: Record<string, string> | Array<{ recordKey: string; selectionId: string }>
 }
 
 type PdfRecord = {
@@ -168,6 +169,30 @@ type AutomationPreviewRow = {
   cardUrl: string
 }
 
+type ProcessOption = {
+  selectionId: string
+  rowNumber: number
+  clientName: string
+  code: string
+  serviceCode: string
+  process: string
+  matter: string
+  amount: number | null
+  dueDay: string
+  financialStatus: string
+  contractDate: string
+}
+
+type PendingProcessSelection = {
+  recordKey: string
+  clientName: string
+  pdfDueDate: string
+  pdfAmount: number | null
+  pdfDescription: string
+  suggestedSelectionId: string
+  options: ProcessOption[]
+}
+
 type AutomationResult = {
   dryRun: boolean
   sheetName: string
@@ -183,6 +208,8 @@ type AutomationResult = {
   updatedCells: number
   logRows: number
   preview: AutomationPreviewRow[]
+  pendingCount: number
+  pendingSelections: PendingProcessSelection[]
 }
 
 type LogDashboardSummary = {
@@ -528,70 +555,71 @@ function findLastFilledRow(values: SheetValues) {
 }
 
 type SheetAmountEntry = {
+  selectionId: string
+  rowNumber: number
+  clientName: string
   normalizedName: string
   code: string
+  serviceCode: string
+  process: string
+  matter: string
   amount: number
   date: string
-}
-
-function buildMatterCodePrefix(matter: string) {
-  const normalized = normalizeLooseText(matter)
-  if (!normalized) return 'cli'
-  if (normalized.includes('consumidor')) return 'cons'
-  if (normalized.includes('civel') || normalized.includes('civil')) return 'civ'
-  if (normalized.includes('trabalh')) return 'trab'
-  if (normalized.includes('famil')) return 'fam'
-  if (normalized.includes('penal') || normalized.includes('criminal')) return 'pen'
-  if (normalized.includes('administr')) return 'adm'
-  if (normalized.includes('previd')) return 'prev'
-  if (normalized.includes('imob')) return 'imo'
-  if (normalized.includes('educ')) return 'edu'
-  return normalized.replace(/[^a-z0-9]/g, '').slice(0, 4) || 'cli'
+  dueDay: string
+  financialStatus: string
 }
 
 function buildSheetAmountLookup(rows: SheetClientRow[]) {
-  const exactLookup = new Map<string, SheetAmountEntry>()
+  const exactLookup = new Map<string, SheetAmountEntry[]>()
   const entries: SheetAmountEntry[] = []
-  const matterCounters = new Map<string, number>()
 
   for (const row of rows) {
     const amount = parseAmount(getCell(row.values, SHEET_TOTAL_VALUE_COLUMN_INDEX))
     const date = normalizeDate(getCell(row.values, 1))
+    const code = getCell(row.values, 5)
+    const serviceCode = getCell(row.values, 7)
     const matter = getCell(row.values, 10)
-    const matterPrefix = buildMatterCodePrefix(matter)
-    const nextIndex = (matterCounters.get(matterPrefix) || 0) + 1
-    matterCounters.set(matterPrefix, nextIndex)
-    const code = `${matterPrefix}-${String(nextIndex).padStart(2, '0')}`
+    const process = getCell(row.values, 12)
+    const dueDay = getCell(row.values, 13)
+    const financialStatus = getCell(row.values, 15)
     if (amount === null && !date && !code) continue
 
     const entry = {
+      selectionId: String(row.rowNumber),
+      rowNumber: row.rowNumber,
+      clientName: row.clientName,
       normalizedName: row.normalizedName,
       code,
+      serviceCode,
+      process,
+      matter,
       amount: amount ?? 0,
       date,
+      dueDay,
+      financialStatus,
     }
 
-    exactLookup.set(row.normalizedName, entry)
+    const bucket = exactLookup.get(row.normalizedName) || []
+    bucket.push(entry)
+    exactLookup.set(row.normalizedName, bucket)
     entries.push(entry)
   }
 
   return { exactLookup, entries }
 }
 
-function resolveSourceForClient(
+function resolveSourceCandidatesForClient(
   lookup: ReturnType<typeof buildSheetAmountLookup>,
   normalizedClientName: string,
 ) {
   const exact = lookup.exactLookup.get(normalizedClientName)
-  if (exact) return exact
+  if (exact && exact.length > 0) return exact
 
-  const truncatedMatch = lookup.entries.find((entry) =>
+  return lookup.entries.filter((entry) =>
     canMatchTruncatedName(entry.normalizedName, normalizedClientName) ||
     canMatchTruncatedName(normalizedClientName, entry.normalizedName) ||
     canMatchShortenedName(entry.normalizedName, normalizedClientName),
   )
-
-  return truncatedMatch || null
 }
 
 async function loadValueSourceRows(
@@ -645,6 +673,138 @@ function buildPdfRecordIndex(pdfRecords: PdfRecord[]) {
   }
 
   return { records, exactLookup }
+}
+
+function normalizeSelectedProcessMatches(
+  value: AutomationBody['selectedProcessMatches'],
+) {
+  const result = new Map<string, string>()
+
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      if (item && typeof item.recordKey === 'string' && typeof item.selectionId === 'string') {
+        result.set(item.recordKey, item.selectionId)
+      }
+    }
+    return result
+  }
+
+  if (value && typeof value === 'object') {
+    for (const [recordKey, selectionId] of Object.entries(value)) {
+      if (typeof selectionId === 'string') {
+        result.set(recordKey, selectionId)
+      }
+    }
+  }
+
+  return result
+}
+
+function parseInstallmentNumber(description: string) {
+  const match = String(description || '').match(/(\d{1,3})\s*(?:a|ª|o|º)?\s*parcela/i)
+  if (!match) return null
+  const parsed = Number(match[1])
+  return Number.isFinite(parsed) ? parsed : null
+}
+
+function buildProcessOption(entry: SheetAmountEntry): ProcessOption {
+  return {
+    selectionId: entry.selectionId,
+    rowNumber: entry.rowNumber,
+    clientName: entry.clientName,
+    code: entry.code,
+    serviceCode: entry.serviceCode,
+    process: entry.process,
+    matter: entry.matter,
+    amount: Number.isFinite(entry.amount) ? entry.amount : null,
+    dueDay: entry.dueDay,
+    financialStatus: entry.financialStatus,
+    contractDate: entry.date,
+  }
+}
+
+function scoreProcessOption(
+  option: ProcessOption,
+  pdfRecord: PreparedPdfRecord,
+  currentCode: string,
+) {
+  let score = 0
+
+  if (currentCode && option.code && normalizeHeader(option.code) === normalizeHeader(currentCode)) {
+    score += 100
+  }
+
+  const dueDay = Number(option.dueDay)
+  const dueDate = parseBrDate(pdfRecord.dueDate || '')
+  if (dueDate && Number.isFinite(dueDay) && dueDay === dueDate.getDate()) {
+    score += 40
+  }
+
+  if (typeof pdfRecord.amount === 'number' && Number.isFinite(option.amount) && option.amount !== null) {
+    if (option.amount >= pdfRecord.amount) score += 10
+    const delta = Math.abs(option.amount - pdfRecord.amount)
+    if (delta <= 0.01) score += 15
+    else if (delta <= pdfRecord.amount) score += 5
+  }
+
+  const installmentNumber = parseInstallmentNumber(pdfRecord.description || '')
+  if (installmentNumber !== null && installmentNumber > 0 && option.amount && pdfRecord.amount) {
+    const estimatedTotal = installmentNumber * pdfRecord.amount
+    const delta = Math.abs(option.amount - estimatedTotal)
+    if (delta <= pdfRecord.amount) score += 15
+  }
+
+  return score
+}
+
+function buildPendingProcessSelection(
+  pdfRecord: PreparedPdfRecord,
+  candidates: SheetAmountEntry[],
+  currentCode: string,
+): PendingProcessSelection {
+  const options = candidates.map(buildProcessOption)
+  const scored = options.map((option) => ({
+    option,
+    score: scoreProcessOption(option, pdfRecord, currentCode),
+  }))
+
+  scored.sort((left, right) => right.score - left.score || left.option.rowNumber - right.option.rowNumber)
+
+  const suggestedSelectionId =
+    scored.length > 0 && (scored.length === 1 || scored[0].score > scored[1].score) && scored[0].score > 0
+      ? scored[0].option.selectionId
+      : ''
+
+  return {
+    recordKey: pdfRecord.recordKey,
+    clientName: pdfRecord.name,
+    pdfDueDate: pdfRecord.dueDate || '',
+    pdfAmount: typeof pdfRecord.amount === 'number' ? pdfRecord.amount : null,
+    pdfDescription: String(pdfRecord.description || '').trim(),
+    suggestedSelectionId,
+    options,
+  }
+}
+
+function resolveSelectedSourceCandidate(
+  candidates: SheetAmountEntry[],
+  selectedSelectionId: string | undefined,
+  currentCode: string,
+) {
+  if (candidates.length === 0) return null
+  if (selectedSelectionId) {
+    return candidates.find((candidate) => candidate.selectionId === selectedSelectionId) || null
+  }
+  if (candidates.length === 1) return candidates[0]
+
+  if (currentCode) {
+    const codeMatches = candidates.filter(
+      (candidate) => candidate.code && normalizeHeader(candidate.code) === normalizeHeader(currentCode),
+    )
+    if (codeMatches.length === 1) return codeMatches[0]
+  }
+
+  return null
 }
 
 function resolvePdfRecordForRow(
@@ -1498,10 +1658,20 @@ function resolveSheetRowForPdfRecord(
   pdfRecord: PreparedPdfRecord,
   sheetLookup: ReturnType<typeof buildSheetRowLookup>,
   usedRowNumbers: Set<number>,
+  preferredCode = '',
 ) {
   const exactMatches = (sheetLookup.exactLookup.get(pdfRecord.normalizedName) || []).filter(
     (row) => !usedRowNumbers.has(row.rowNumber),
   )
+
+  if (preferredCode) {
+    const codeMatch = exactMatches.find(
+      (row) => normalizeHeader(getCell(row.values, 5)) === normalizeHeader(preferredCode),
+    )
+    if (codeMatch) {
+      return codeMatch
+    }
+  }
 
   if (exactMatches.length > 0) {
     return exactMatches[0]
@@ -1556,6 +1726,7 @@ async function runAutomation(req: Request): Promise<AutomationResult> {
   const maxRows = Number.isFinite(parsedMaxRows) && parsedMaxRows > 0 ? parsedMaxRows : 0
   const startRow = Number.isFinite(parsedStartRow) && parsedStartRow >= 2 ? parsedStartRow : 2
   const pdfRecords = Array.isArray(body.pdfRecords) ? body.pdfRecords : []
+  const selectedProcessMatches = normalizeSelectedProcessMatches(body.selectedProcessMatches)
 
   if (!spreadsheetId) {
     throw new Error('Variavel obrigatoria ausente: GOOGLE_SPREADSHEET_ID')
@@ -1628,6 +1799,7 @@ async function runAutomation(req: Request): Promise<AutomationResult> {
     const timestamp = buildTimestamp()
     const executionDate = buildCurrentDate()
     const logEntries: AutomationLogEntry[] = []
+    const pendingSelections: PendingProcessSelection[] = []
     const updateRequests: Array<{ range: string; values: SheetValues }> = []
     let updated = 0
     let refreshed = 0
@@ -1641,7 +1813,15 @@ async function runAutomation(req: Request): Promise<AutomationResult> {
 
     for (const pdfRecord of pdfIndex.records) {
       try {
-        const matchedRow = resolveSheetRowForPdfRecord(pdfRecord, sheetLookup, usedRowNumbers)
+        const selectedSource = valueAmountLookup.entries.find(
+          (entry) => entry.selectionId === selectedProcessMatches.get(pdfRecord.recordKey),
+        )
+        const matchedRow = resolveSheetRowForPdfRecord(
+          pdfRecord,
+          sheetLookup,
+          usedRowNumbers,
+          selectedSource?.code || '',
+        )
         const isCreated = !matchedRow
         const workingRow: SheetClientRow = matchedRow || {
           rowNumber: nextRowNumber,
@@ -1683,7 +1863,20 @@ async function runAutomation(req: Request): Promise<AutomationResult> {
 
         const errorParts = [integra.error, trello.error].filter(Boolean) as string[]
         const dueDate = normalizeDate(integra.dueDate || pdfRecord.dueDate || '')
-        const sourceEntry = resolveSourceForClient(valueAmountLookup, workingRow.normalizedName)
+        const sourceCandidates = resolveSourceCandidatesForClient(valueAmountLookup, workingRow.normalizedName)
+        const sourceEntry = resolveSelectedSourceCandidate(
+          sourceCandidates,
+          selectedProcessMatches.get(pdfRecord.recordKey),
+          getCell(workingRow.values, 5),
+        )
+
+        if (!sourceEntry && sourceCandidates.length > 1) {
+          pendingSelections.push(
+            buildPendingProcessSelection(pdfRecord, sourceCandidates, getCell(workingRow.values, 5)),
+          )
+          continue
+        }
+
         const sourceCode = sourceEntry?.code || getCell(workingRow.values, 5)
         const sourceDate = sourceEntry?.date || getCell(workingRow.values, 1)
         const totalAmount = sourceEntry?.amount ?? parseAmount(getCell(workingRow.values, SHEET_TOTAL_VALUE_COLUMN_INDEX))
@@ -1843,6 +2036,8 @@ async function runAutomation(req: Request): Promise<AutomationResult> {
       updatedCells: dryRun ? 0 : updateRequests.length,
       logRows: logEntries.length,
       preview: logEntries.map(buildPreviewRow),
+      pendingCount: pendingSelections.length,
+      pendingSelections,
     }
   }
 
@@ -1871,6 +2066,7 @@ async function runAutomation(req: Request): Promise<AutomationResult> {
   const timestamp = buildTimestamp()
   const executionDate = buildCurrentDate()
   const logEntries: AutomationLogEntry[] = []
+  const pendingSelections: PendingProcessSelection[] = []
   const updateRequests: Array<{ range: string; values: SheetValues }> = []
   let updated = 0
   let refreshed = 0
@@ -1909,7 +2105,16 @@ async function runAutomation(req: Request): Promise<AutomationResult> {
       integra.paidAmount,
       integra.upcomingAmount,
     )
-    const sourceEntry = resolveSourceForClient(valueAmountLookup, row.normalizedName)
+    const sourceCandidates = resolveSourceCandidatesForClient(valueAmountLookup, row.normalizedName)
+    const sourceEntry = resolveSelectedSourceCandidate(
+      sourceCandidates,
+      selectedProcessMatches.get(pdfRecord.recordKey),
+      getCell(row.values, 5),
+    )
+    if (!sourceEntry && sourceCandidates.length > 1) {
+      pendingSelections.push(buildPendingProcessSelection(pdfRecord, sourceCandidates, getCell(row.values, 5)))
+      return
+    }
     const sourceCode = sourceEntry?.code || getCell(row.values, 5)
     const sourceDate = sourceEntry?.date || getCell(row.values, 1)
     const totalAmount = sourceEntry?.amount ?? parseAmount(getCell(row.values, SHEET_TOTAL_VALUE_COLUMN_INDEX))
@@ -2031,7 +2236,16 @@ async function runAutomation(req: Request): Promise<AutomationResult> {
       integra.paidAmount,
       integra.upcomingAmount,
     )
-    const sourceEntry = resolveSourceForClient(valueAmountLookup, row.normalizedName)
+    const sourceCandidates = resolveSourceCandidatesForClient(valueAmountLookup, row.normalizedName)
+    const sourceEntry = resolveSelectedSourceCandidate(
+      sourceCandidates,
+      selectedProcessMatches.get(pdfRecord.recordKey),
+      getCell(row.values, 5),
+    )
+    if (!sourceEntry && sourceCandidates.length > 1) {
+      pendingSelections.push(buildPendingProcessSelection(pdfRecord, sourceCandidates, getCell(row.values, 5)))
+      continue
+    }
     const sourceCode = sourceEntry?.code || getCell(row.values, 5)
     const sourceDate = sourceEntry?.date || getCell(row.values, 1)
     const totalAmount = sourceEntry?.amount ?? parseAmount(getCell(row.values, SHEET_TOTAL_VALUE_COLUMN_INDEX))
@@ -2197,9 +2411,11 @@ async function runAutomation(req: Request): Promise<AutomationResult> {
     ignored,
     notFound,
     errors,
-    updatedCells: dryRun ? 0 : updateRequests.length,
-    logRows: logEntries.length,
-    preview: logEntries.map(buildPreviewRow),
+      updatedCells: dryRun ? 0 : updateRequests.length,
+      logRows: logEntries.length,
+      preview: logEntries.map(buildPreviewRow),
+      pendingCount: pendingSelections.length,
+      pendingSelections,
   }
 }
 
