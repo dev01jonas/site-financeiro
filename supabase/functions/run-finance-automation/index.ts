@@ -1743,11 +1743,11 @@ async function runAutomation(req: Request): Promise<AutomationResult> {
       buildLogRow({
         timestamp,
         rowNumber: null,
-        clientName: body.pdfFileName || 'PDF',
+        clientName: body.pdfFileName || 'Excel',
         status: 'erro',
         action: 'erro_global',
         sources: [],
-        errorMessage: 'PDF não encontrado ou sem registros válidos para processar.',
+        errorMessage: 'Excel não encontrado ou sem registros válidos para processar.',
         details: 'A execução foi interrompida antes de consultar planilha, Integra e Trello.',
         cardUrl: '',
       }),
@@ -1768,7 +1768,7 @@ async function runAutomation(req: Request): Promise<AutomationResult> {
       logRows: errorRows.length,
       writeStatus: 'Execução interrompida',
     })
-    throw new Error('PDF não encontrado ou sem registros válidos para processar.')
+    throw new Error('Excel não encontrado ou sem registros válidos para processar.')
   }
 
   {
@@ -1961,7 +1961,7 @@ async function runAutomation(req: Request): Promise<AutomationResult> {
               !isCreated && updatePlan.action === 'data_atualizada'
                 ? 'Sem mudança de conteúdo; apenas data da atualização foi renovada.'
                 : null,
-              body.pdfFileName ? `PDF: ${body.pdfFileName}` : null,
+              body.pdfFileName ? `Excel: ${body.pdfFileName}` : null,
               trello.resultLabel ? `Trello: ${trello.resultLabel}` : null,
               dueDate ? `Vencimento: ${dueDate}` : null,
             ]
@@ -1982,7 +1982,7 @@ async function runAutomation(req: Request): Promise<AutomationResult> {
           sources: ['PDF'],
           errorMessage: error instanceof Error ? error.message : 'Falha ao processar cliente do PDF.',
           details: [
-            body.pdfFileName ? `PDF: ${body.pdfFileName}` : null,
+            body.pdfFileName ? `Excel: ${body.pdfFileName}` : null,
             pdfRecord.dueDate ? `Vencimento: ${normalizeDate(pdfRecord.dueDate)}` : null,
             typeof pdfRecord.amount === 'number' ? `Valor: ${formatCurrency(pdfRecord.amount)}` : null,
           ]
@@ -2191,7 +2191,7 @@ async function runAutomation(req: Request): Promise<AutomationResult> {
           !options.created && updatePlan.action === 'data_atualizada'
             ? 'Sem mudança de conteúdo; apenas data da atualização foi renovada.'
             : null,
-          body.pdfFileName ? `PDF: ${body.pdfFileName}` : null,
+          body.pdfFileName ? `Excel: ${body.pdfFileName}` : null,
           trello.resultLabel ? `Trello: ${trello.resultLabel}` : null,
           dueDate ? `Vencimento: ${dueDate}` : null,
         ]
@@ -2346,9 +2346,9 @@ async function runAutomation(req: Request): Promise<AutomationResult> {
       status: 'cliente_nao_encontrado_na_planilha',
       action: 'nao_encontrado',
       sources: ['PDF'],
-      errorMessage: 'Cliente do PDF não foi localizado na coluna I da planilha.',
+      errorMessage: 'Cliente do Excel não foi localizado na coluna I da planilha.',
       details: [
-        body.pdfFileName ? `PDF: ${body.pdfFileName}` : null,
+        body.pdfFileName ? `Excel: ${body.pdfFileName}` : null,
         pdfRecord.dueDate ? `Vencimento: ${normalizeDate(pdfRecord.dueDate)}` : null,
         typeof pdfRecord.amount === 'number' ? `Valor: ${formatCurrency(pdfRecord.amount)}` : null,
       ]
@@ -2362,7 +2362,7 @@ async function runAutomation(req: Request): Promise<AutomationResult> {
     logEntries.push({
       timestamp,
       rowNumber: null,
-      clientName: body.pdfFileName || 'PDF',
+      clientName: body.pdfFileName || 'Excel',
       status: 'pre_visualizacao',
       action: 'dry_run',
       sources: [],

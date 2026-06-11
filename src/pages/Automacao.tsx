@@ -110,7 +110,7 @@ function getFunctionErrorMessage(error: unknown) {
   const lower = message.toLowerCase();
 
   if (lower.includes('functions_http_error') || lower.includes('edge function returned a non-2xx status code')) {
-    return 'A automação respondeu com erro no Supabase. Confira o PDF enviado, a aba da planilha e as integrações.';
+    return 'A automação respondeu com erro no Supabase. Confira o Excel enviado, a aba da planilha e as integrações.';
   }
 
   if (
@@ -232,13 +232,13 @@ export default function Automacao() {
       const records = await extractBillingRecords(file);
       setPdfRecords(records);
       toast({
-        title: 'PDF processado',
-        description: `${records.length} registro(s) extraído(s) do PDF.`,
+        title: 'Excel processado',
+        description: `${records.length} registro(s) extraído(s) do Excel.`,
       });
     } catch (error) {
       setPdfRecords([]);
       toast({
-        title: 'Não foi possível ler o PDF',
+        title: 'Não foi possível ler o Excel',
         description: getErrorMessage(error),
         variant: 'destructive',
       });
@@ -251,7 +251,7 @@ export default function Automacao() {
   const automationMutation = useMutation({
     mutationFn: async (selectedMatches: Record<string, string> = {}) => {
       if (pdfRecords.length === 0) {
-        throw new Error('Selecione um PDF válido antes de executar a automação.');
+        throw new Error('Selecione um Excel válido antes de executar a automação.');
       }
 
       const payload = {
@@ -279,8 +279,8 @@ export default function Automacao() {
         setSelectedProcessMatches(suggestedMatches);
         setProcessSelectionDialogOpen(true);
         toast({
-          title: 'Escolha o processo correto',
-          description: `${data.pendingSelections.length} cliente(s) precisam de confirmação antes do preenchimento.`,
+        title: 'Escolha o processo correto',
+        description: `${data.pendingSelections.length} cliente(s) precisam de confirmação antes do preenchimento.`,
         });
         return;
       }
@@ -289,7 +289,7 @@ export default function Automacao() {
       setProcessSelectionDialogOpen(false);
       toast({
         title: data.dryRun ? 'Teste concluído' : 'Planilha atualizada',
-        description: `${data.matched} cliente(s) com match no PDF, ${data.updated + data.refreshed} linha(s) tratada(s).`,
+        description: `${data.matched} cliente(s) com match no Excel, ${data.updated + data.refreshed} linha(s) tratada(s).`,
       });
     },
     onError: (error) => {
@@ -316,13 +316,13 @@ export default function Automacao() {
     {
       title: 'Clientes com match',
       value: lastResult?.matched ?? '-',
-      subtitle: 'Correspondência entre PDF e coluna I',
+      subtitle: 'Correspondência entre Excel e coluna I',
       icon: FileText,
     },
     {
       title: 'Não encontrados',
       value: lastResult?.notFound ?? '-',
-      subtitle: lastResult?.pendingCount ? `${lastResult.pendingCount} aguardando seleção` : 'Clientes do PDF sem linha correspondente',
+      subtitle: lastResult?.pendingCount ? `${lastResult.pendingCount} aguardando seleção` : 'Clientes do Excel sem linha correspondente',
       icon: AlertTriangle,
     },
     {
@@ -338,13 +338,13 @@ export default function Automacao() {
       <section className="overflow-hidden rounded-[1.75rem] border border-border/70 bg-[linear-gradient(135deg,rgba(18,31,49,0.96),rgba(28,46,73,0.88))] text-white shadow-[0_26px_80px_rgba(15,23,42,0.18)]">
         <div className="grid gap-8 px-6 py-7 lg:grid-cols-[1.12fr_0.88fr] lg:px-8">
           <div className="space-y-4">
-            <p className="text-xs font-semibold uppercase tracking-[0.34em] text-slate-300">Automação PDF + Integra + Trello</p>
+            <p className="text-xs font-semibold uppercase tracking-[0.34em] text-slate-300">Automação Excel + Integra + Trello</p>
             <div className="space-y-3">
               <h1 className="max-w-3xl text-3xl font-semibold tracking-tight sm:text-4xl">
                 Atualize e complete a planilha a partir do nome da coluna I.
               </h1>
               <p className="max-w-2xl text-sm leading-6 text-slate-300">
-                A execução cruza o PDF enviado com a planilha, consulta Integra e Trello quando disponíveis, compara os dados
+                A execução cruza o Excel enviado com a planilha, consulta Integra e Trello quando disponíveis, compara os dados
                 atuais e registra tudo na aba LOG_AUTOMACAO.
               </p>
             </div>
@@ -356,13 +356,13 @@ export default function Automacao() {
               <p className="mt-3 text-2xl font-semibold text-white">{dryRun ? 'Teste' : 'Execução'}</p>
             </div>
             <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
-              <p className="text-xs uppercase tracking-[0.18em] text-slate-300">PDF</p>
+              <p className="text-xs uppercase tracking-[0.18em] text-slate-300">Arquivo</p>
               <p className="mt-3 text-sm font-semibold text-white">{pdfFileName || 'Nenhum arquivo enviado'}</p>
             </div>
             <div className="rounded-2xl border border-white/10 bg-white/5 p-4 sm:col-span-2">
               <p className="text-xs uppercase tracking-[0.18em] text-slate-300">Segurança</p>
               <p className="mt-2 text-sm leading-6 text-slate-300">
-                A automação atualiza clientes existentes e também cria novas linhas quando o cliente vier no PDF e ainda não existir na planilha.
+                A automação atualiza clientes existentes e também cria novas linhas quando o cliente vier no Excel e ainda não existir na planilha.
               </p>
             </div>
           </div>
@@ -380,9 +380,9 @@ export default function Automacao() {
           <CardContent className="space-y-5 p-5">
             <div className="space-y-3 rounded-2xl border border-border/70 bg-background/80 p-4">
               <div className="space-y-1">
-                <Label htmlFor="pdf-upload">PDF do Integra</Label>
+                <Label htmlFor="pdf-upload">Excel do Integra</Label>
                 <p className="text-xs leading-5 text-muted-foreground">
-                  Envie o PDF baixado antes da execução. Ele será usado para fazer o match pelo nome.
+                  Envie o Excel exportado antes da execução. Ele será usado para fazer o match pelo nome.
                 </p>
               </div>
               <label
@@ -391,16 +391,16 @@ export default function Automacao() {
               >
                 <span className="truncate text-muted-foreground">
                   {pdfLoading
-                    ? 'Lendo PDF...'
+                    ? 'Lendo Excel...'
                     : pdfFileName
                       ? `${pdfFileName} (${pdfRecords.length} registro(s))`
-                      : 'Selecionar arquivo .pdf'}
+                      : 'Selecionar arquivo .xls ou .xlsx'}
                 </span>
                 <span className="rounded-lg bg-primary/10 p-2 text-primary">
                   <Upload className="h-4 w-4" />
                 </span>
               </label>
-              <input id="pdf-upload" type="file" accept=".pdf" className="hidden" onChange={handlePdfSelection} />
+              <input id="pdf-upload" type="file" accept=".xls,.xlsx" className="hidden" onChange={handlePdfSelection} />
             </div>
 
             <div className="flex items-center justify-between gap-4 rounded-2xl border border-border/70 bg-background/80 p-4">
@@ -589,7 +589,7 @@ export default function Automacao() {
                   <div className="space-y-1">
                     <p className="text-base font-semibold">{selection.clientName}</p>
                     <p className="text-xs text-muted-foreground">
-                      PDF: {selection.pdfDescription || 'Sem descrição'}
+                      Excel: {selection.pdfDescription || 'Sem descrição'}
                       {selection.pdfAmount !== null
                         ? ` | Parcela: ${selection.pdfAmount.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}`
                         : ''}
