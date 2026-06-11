@@ -123,6 +123,7 @@ type SheetClientRow = {
 }
 
 type ColumnRole =
+  | 'sourceCode'
   | 'fillDate'
   | 'dueDate'
   | 'amount'
@@ -456,6 +457,7 @@ function resolveColumnRole(header: string): ColumnRole | null {
   const normalized = normalizeHeader(header)
   if (!normalized) return null
 
+  if (['COD_CL', 'CODIGO_CLIENTE', 'CODIGO_DO_CLIENTE'].includes(normalized)) return 'sourceCode'
   if (normalized === 'DATA') return 'fillDate'
   if (['VENCIMENTO', 'DATA_DE_VENCIMENTO', 'DT_VENCIMENTO'].includes(normalized)) return 'dueDate'
   if (['VALOR', 'VALOR_TOTAL', 'TOTAL'].includes(normalized)) return 'amount'
@@ -527,21 +529,44 @@ function findLastFilledRow(values: SheetValues) {
 
 type SheetAmountEntry = {
   normalizedName: string
+  code: string
   amount: number
   date: string
+}
+
+function buildMatterCodePrefix(matter: string) {
+  const normalized = normalizeLooseText(matter)
+  if (!normalized) return 'cli'
+  if (normalized.includes('consumidor')) return 'cons'
+  if (normalized.includes('civel') || normalized.includes('civil')) return 'civ'
+  if (normalized.includes('trabalh')) return 'trab'
+  if (normalized.includes('famil')) return 'fam'
+  if (normalized.includes('penal') || normalized.includes('criminal')) return 'pen'
+  if (normalized.includes('administr')) return 'adm'
+  if (normalized.includes('previd')) return 'prev'
+  if (normalized.includes('imob')) return 'imo'
+  if (normalized.includes('educ')) return 'edu'
+  return normalized.replace(/[^a-z0-9]/g, '').slice(0, 4) || 'cli'
 }
 
 function buildSheetAmountLookup(rows: SheetClientRow[]) {
   const exactLookup = new Map<string, SheetAmountEntry>()
   const entries: SheetAmountEntry[] = []
+  const matterCounters = new Map<string, number>()
 
   for (const row of rows) {
     const amount = parseAmount(getCell(row.values, SHEET_TOTAL_VALUE_COLUMN_INDEX))
     const date = normalizeDate(getCell(row.values, 1))
-    if (amount === null && !date) continue
+    const matter = getCell(row.values, 10)
+    const matterPrefix = buildMatterCodePrefix(matter)
+    const nextIndex = (matterCounters.get(matterPrefix) || 0) + 1
+    matterCounters.set(matterPrefix, nextIndex)
+    const code = `${matterPrefix}-${String(nextIndex).padStart(2, '0')}`
+    if (amount === null && !date && !code) continue
 
     const entry = {
       normalizedName: row.normalizedName,
+      code,
       amount: amount ?? 0,
       date,
     }
@@ -1280,6 +1305,7 @@ function computeColumnValue(
   column: TargetColumn,
   timestamp: string,
   executionDate: string,
+  sourceCode: string,
   sourceDate: string,
   sources: string[],
   errorMessage: string,
@@ -1294,6 +1320,8 @@ function computeColumnValue(
   trello: TrelloLookupResult,
 ) {
   switch (column.role) {
+    case 'sourceCode':
+      return sourceCode
     case 'fillDate':
       return sourceDate
     case 'dueDate':
@@ -1336,6 +1364,7 @@ function buildUpdatePlan(
   columns: TargetColumn[],
   timestamp: string,
   executionDate: string,
+  sourceCode: string,
   sourceDate: string,
   sources: string[],
   errorMessage: string,
@@ -1360,6 +1389,7 @@ function buildUpdatePlan(
       column,
       timestamp,
       executionDate,
+      sourceCode,
       sourceDate,
       sources,
       errorMessage,
@@ -1654,6 +1684,7 @@ async function runAutomation(req: Request): Promise<AutomationResult> {
         const errorParts = [integra.error, trello.error].filter(Boolean) as string[]
         const dueDate = normalizeDate(integra.dueDate || pdfRecord.dueDate || '')
         const sourceEntry = resolveSourceForClient(valueAmountLookup, workingRow.normalizedName)
+        const sourceCode = sourceEntry?.code || getCell(workingRow.values, 5)
         const sourceDate = sourceEntry?.date || getCell(workingRow.values, 1)
         const totalAmount = sourceEntry?.amount ?? parseAmount(getCell(workingRow.values, SHEET_TOTAL_VALUE_COLUMN_INDEX))
         const amount = integra.amount ?? pdfRecord.amount ?? null
@@ -1672,6 +1703,7 @@ async function runAutomation(req: Request): Promise<AutomationResult> {
           targetColumns,
           timestamp,
           executionDate,
+          sourceCode,
           sourceDate,
           [...sources],
           errorParts.join(' | '),
@@ -1878,6 +1910,7 @@ async function runAutomation(req: Request): Promise<AutomationResult> {
       integra.upcomingAmount,
     )
     const sourceEntry = resolveSourceForClient(valueAmountLookup, row.normalizedName)
+    const sourceCode = sourceEntry?.code || getCell(row.values, 5)
     const sourceDate = sourceEntry?.date || getCell(row.values, 1)
     const totalAmount = sourceEntry?.amount ?? parseAmount(getCell(row.values, SHEET_TOTAL_VALUE_COLUMN_INDEX))
     const amounts = deriveAmounts(totalAmount, dueDate, status, amount, description, integra)
@@ -1886,6 +1919,7 @@ async function runAutomation(req: Request): Promise<AutomationResult> {
       targetColumns,
       timestamp,
       executionDate,
+      sourceCode,
       sourceDate,
       [...sources],
       errorParts.join(' | '),
@@ -1998,6 +2032,7 @@ async function runAutomation(req: Request): Promise<AutomationResult> {
       integra.upcomingAmount,
     )
     const sourceEntry = resolveSourceForClient(valueAmountLookup, row.normalizedName)
+    const sourceCode = sourceEntry?.code || getCell(row.values, 5)
     const sourceDate = sourceEntry?.date || getCell(row.values, 1)
     const totalAmount = sourceEntry?.amount ?? parseAmount(getCell(row.values, SHEET_TOTAL_VALUE_COLUMN_INDEX))
     const amounts = deriveAmounts(totalAmount, dueDate, status, amount, description, integra)
@@ -2006,6 +2041,7 @@ async function runAutomation(req: Request): Promise<AutomationResult> {
       targetColumns,
       timestamp,
       executionDate,
+      sourceCode,
       sourceDate,
       [...sources],
       errorParts.join(' | '),
