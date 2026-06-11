@@ -1451,6 +1451,14 @@ function deriveAmounts(
 
   const days = dueDate ? diffDaysFromToday(dueDate) : null
   if (days !== null && days > 0) {
+    if (totalAmount !== null && totalAmount > parsedAmount) {
+      return {
+        openAmount: parsedAmount,
+        paidAmount: Math.max(totalAmount - parsedAmount, 0),
+        upcomingAmount: 0,
+      }
+    }
+
     return { openAmount: parsedAmount, paidAmount: 0, upcomingAmount: 0 }
   }
 

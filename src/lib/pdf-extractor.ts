@@ -11,8 +11,18 @@ export interface ExtractedRecord {
   description?: string;
 }
 
+function decodeHtmlEntities(value: string) {
+  if (!value || !/[&][#a-zA-Z0-9]+;/.test(value)) {
+    return value;
+  }
+
+  const textarea = document.createElement('textarea');
+  textarea.innerHTML = value;
+  return textarea.value;
+}
+
 function normalizeName(value: string) {
-  return value
+  return decodeHtmlEntities(value)
     .replace(/\s+/g, ' ')
     .replace(/\s*\/\s*.*/, '')
     .replace(/\s*(?:\.{3}|…)\s*$/, '')
@@ -248,7 +258,7 @@ function normalizeCell(value: unknown) {
     return value;
   }
 
-  return String(value ?? '').replace(/\s+/g, ' ').trim();
+  return decodeHtmlEntities(String(value ?? '')).replace(/\s+/g, ' ').trim();
 }
 
 function findColumnIndex(headers: string[], aliases: string[]) {
@@ -266,9 +276,10 @@ function mapRowsToBillingRecords(rows: unknown[][]): ExtractedRecord[] {
       const nameIndex = findColumnIndex(headers, ['cliente', 'nome', 'sacado', 'devedor', 'pagador', 'contratante']);
       const dueDateIndex = findColumnIndex(headers, ['vencimento', 'data vencimento', 'dt vencimento', 'venc.', 'dt venc']);
       const amountIndex = findColumnIndex(headers, ['valor', 'vlr', 'total', 'saldo', 'parcela', 'honorario', 'honorarios']);
+      const descriptionIndex = findColumnIndex(headers, ['descricao', 'descrição', 'detalhe', 'parcela', 'observacao', 'observação']);
       const emailIndex = findColumnIndex(headers, ['email', 'e-mail', 'mail', 'correio']);
       const score = [nameIndex, dueDateIndex, amountIndex].filter((index) => index !== -1).length;
-      return { rowIndex, nameIndex, dueDateIndex, amountIndex, emailIndex, score };
+      return { rowIndex, nameIndex, dueDateIndex, amountIndex, descriptionIndex, emailIndex, score };
     })
     .filter((candidate) => candidate.score >= 2)
     .sort((a, b) => b.score - a.score || a.rowIndex - b.rowIndex);
@@ -289,8 +300,9 @@ function mapRowsToBillingRecords(rows: unknown[][]): ExtractedRecord[] {
       const dueDate = parseExcelDate(columns[header.dueDateIndex]);
       const amountCell = normalizeCell(columns[header.amountIndex]);
       const amount = typeof amountCell === 'number' ? amountCell : parseAmount(String(amountCell || ''));
+      const description = header.descriptionIndex >= 0 ? String(normalizeCell(columns[header.descriptionIndex]) || '') : '';
       const email = header.emailIndex >= 0 ? String(normalizeCell(columns[header.emailIndex]) || '').trim().toLowerCase() : '';
-      return { name, dueDate, amount, email: isValidEmail(email) ? email : undefined };
+      return { name, dueDate, amount, description: description || undefined, email: isValidEmail(email) ? email : undefined };
     })
     .filter((record) => record.name.length > 3 && /^\d{2}\/\d{2}\/\d{4}$/.test(record.dueDate) && record.amount > 0);
 }
@@ -331,8 +343,22 @@ function parseRowsWithoutHeaders(rows: unknown[][]): ExtractedRecord[] {
       const name = normalizeName(String(nameCell || ''));
       const emailCell = normalizedColumns.find((column) => isValidEmail(String(column || '').trim()));
       const email = String(emailCell || '').trim().toLowerCase();
+      const descriptionCell = normalizedColumns.find((column, index) => {
+        if (index === dueDateIndex || index === amountIndex) {
+          return false;
+        }
 
-      return { name, dueDate, amount, email: isValidEmail(email) ? email : undefined };
+        const text = String(column || '').trim();
+        return /parcela|descri|observa/i.test(text);
+      });
+
+      return {
+        name,
+        dueDate,
+        amount,
+        description: descriptionCell ? String(descriptionCell).trim() : undefined,
+        email: isValidEmail(email) ? email : undefined,
+      };
     })
     .filter((record): record is ExtractedRecord => {
       return !!record && record.name.length > 3 && /^\d{2}\/\d{2}\/\d{4}$/.test(record.dueDate) && record.amount > 0;
