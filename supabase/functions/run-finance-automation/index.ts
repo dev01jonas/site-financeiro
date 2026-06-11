@@ -179,6 +179,7 @@ type ProcessOption = {
   matter: string
   amount: number | null
   dueDay: string
+  status: string
   financialStatus: string
   contractDate: string
 }
@@ -566,6 +567,7 @@ type SheetAmountEntry = {
   amount: number
   date: string
   dueDay: string
+  status: string
   financialStatus: string
 }
 
@@ -581,6 +583,7 @@ function buildSheetAmountLookup(rows: SheetClientRow[]) {
     const matter = getCell(row.values, 10)
     const process = getCell(row.values, 12)
     const dueDay = getCell(row.values, 13)
+    const status = getCell(row.values, 14)
     const financialStatus = getCell(row.values, 15)
     if (amount === null && !date && !code) continue
 
@@ -596,6 +599,7 @@ function buildSheetAmountLookup(rows: SheetClientRow[]) {
       amount: amount ?? 0,
       date,
       dueDay,
+      status,
       financialStatus,
     }
 
@@ -718,9 +722,33 @@ function buildProcessOption(entry: SheetAmountEntry): ProcessOption {
     matter: entry.matter,
     amount: Number.isFinite(entry.amount) ? entry.amount : null,
     dueDay: entry.dueDay,
+    status: entry.status,
     financialStatus: entry.financialStatus,
     contractDate: entry.date,
   }
+}
+
+function isClosedOrPaidProcess(...values: Array<unknown>) {
+  const normalizedValues = values
+    .map((value) => normalizeLooseText(value))
+    .filter(Boolean)
+
+  return normalizedValues.some(
+    (value) =>
+      value.includes('quitado') ||
+      value.includes('a vista') ||
+      value.includes('avista') ||
+      value.includes('finalizado') ||
+      value.includes('pago'),
+  )
+}
+
+function getSelectableProcessCandidates(candidates: SheetAmountEntry[]) {
+  const selectable = candidates.filter(
+    (candidate) => !isClosedOrPaidProcess(candidate.status, candidate.financialStatus),
+  )
+
+  return selectable.length > 0 ? selectable : candidates
 }
 
 function scoreProcessOption(
@@ -762,7 +790,7 @@ function buildPendingProcessSelection(
   candidates: SheetAmountEntry[],
   currentCode: string,
 ): PendingProcessSelection {
-  const options = candidates.map(buildProcessOption)
+  const options = getSelectableProcessCandidates(candidates).map(buildProcessOption)
   const scored = options.map((option) => ({
     option,
     score: scoreProcessOption(option, pdfRecord, currentCode),
@@ -791,14 +819,15 @@ function resolveSelectedSourceCandidate(
   selectedSelectionId: string | undefined,
   currentCode: string,
 ) {
-  if (candidates.length === 0) return null
+  const selectableCandidates = getSelectableProcessCandidates(candidates)
+  if (selectableCandidates.length === 0) return null
   if (selectedSelectionId) {
-    return candidates.find((candidate) => candidate.selectionId === selectedSelectionId) || null
+    return selectableCandidates.find((candidate) => candidate.selectionId === selectedSelectionId) || null
   }
-  if (candidates.length === 1) return candidates[0]
+  if (selectableCandidates.length === 1) return selectableCandidates[0]
 
   if (currentCode) {
-    const codeMatches = candidates.filter(
+    const codeMatches = selectableCandidates.filter(
       (candidate) => candidate.code && normalizeHeader(candidate.code) === normalizeHeader(currentCode),
     )
     if (codeMatches.length === 1) return codeMatches[0]
