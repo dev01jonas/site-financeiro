@@ -39,7 +39,6 @@ type AutomationPreviewRow = {
 type AutomationResult = {
   dryRun: boolean;
   sheetName: string;
-  startRow: number;
   processed: number;
   skipped: number;
   matched: number;
@@ -131,8 +130,6 @@ function getFunctionErrorMessage(error: unknown) {
 
 async function runAutomationRequest(payload: {
   dryRun: boolean;
-  maxRows?: number;
-  startRow?: number;
   sheetName?: string;
   pdfFileName?: string;
   pdfRecords: ExtractedRecord[];
@@ -210,8 +207,6 @@ function formatActionLabel(action: string) {
 export default function Automacao() {
   const { toast } = useToast();
   const [dryRun, setDryRun] = useState(true);
-  const [maxRows, setMaxRows] = useState('');
-  const [startRow, setStartRow] = useState('');
   const [sheetName, setSheetName] = useState('');
   const [pdfFileName, setPdfFileName] = useState('');
   const [pdfRecords, setPdfRecords] = useState<ExtractedRecord[]>([]);
@@ -256,8 +251,6 @@ export default function Automacao() {
 
       const payload = {
         dryRun,
-        maxRows: maxRows.trim() ? Number(maxRows) : undefined,
-        startRow: startRow.trim() ? Number(startRow) : undefined,
         sheetName: sheetName.trim() || undefined,
         pdfFileName: pdfFileName || undefined,
         pdfRecords,
@@ -422,36 +415,6 @@ export default function Automacao() {
                 placeholder="Ex.: Operação Atlas (PRD)"
                 className="h-11 rounded-xl border-border/70 bg-background/80"
               />
-            </div>
-
-            <div className="space-y-2">
-              <Label htmlFor="max-rows">Limite de linhas (opcional)</Label>
-              <Input
-                id="max-rows"
-                value={maxRows}
-                onChange={(event) => setMaxRows(event.target.value)}
-                inputMode="numeric"
-                placeholder="Deixe em branco para buscar a aba inteira"
-                className="h-11 rounded-xl border-border/70 bg-background/80"
-              />
-              <p className="text-xs leading-5 text-muted-foreground">
-                Se ficar vazio, a automação procura em toda a aba por conta própria.
-              </p>
-            </div>
-
-            <div className="space-y-2">
-              <Label htmlFor="start-row">Começar na linha (opcional)</Label>
-              <Input
-                id="start-row"
-                value={startRow}
-                onChange={(event) => setStartRow(event.target.value)}
-                inputMode="numeric"
-                placeholder="Deixe em branco para começar do topo"
-                className="h-11 rounded-xl border-border/70 bg-background/80"
-              />
-              <p className="text-xs leading-5 text-muted-foreground">
-                Use esse campo só se quiser restringir a busca. Em branco, a leitura começa no topo da coluna I.
-              </p>
             </div>
 
             <Button
@@ -657,3 +620,4 @@ export default function Automacao() {
     </div>
   );
 }
+
