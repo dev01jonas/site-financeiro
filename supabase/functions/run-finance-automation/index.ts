@@ -296,6 +296,26 @@ function canMatchTruncatedName(sheetName: string, pdfStem: string) {
   return lastToken.length >= 2
 }
 
+function canMatchShortenedName(leftName: string, rightName: string) {
+  if (!leftName || !rightName) return false
+
+  const [shorter, longer] =
+    leftName.length <= rightName.length ? [leftName, rightName] : [rightName, leftName]
+
+  if (!longer.startsWith(shorter)) return false
+
+  const tokens = shorter.split(' ').filter(Boolean)
+  if (tokens.length < 3) return false
+
+  const lastToken = tokens[tokens.length - 1] || ''
+  if (['de', 'da', 'do', 'dos', 'das', 'e'].includes(lastToken)) return false
+
+  const joinedLength = tokens.join('').length
+  if (joinedLength < 10) return false
+
+  return lastToken.length >= 3
+}
+
 function quoteSheetName(sheetName: string) {
   return `'${sheetName.replaceAll("'", "''")}'`
 }
@@ -543,8 +563,7 @@ function resolveSourceForClient(
   const truncatedMatch = lookup.entries.find((entry) =>
     canMatchTruncatedName(entry.normalizedName, normalizedClientName) ||
     canMatchTruncatedName(normalizedClientName, entry.normalizedName) ||
-    entry.normalizedName.startsWith(normalizedClientName) ||
-    normalizedClientName.startsWith(entry.normalizedName),
+    canMatchShortenedName(entry.normalizedName, normalizedClientName),
   )
 
   return truncatedMatch || null
@@ -617,7 +636,11 @@ function resolvePdfRecordForRow(
 
   const truncatedMatches = pdfIndex.records
     .filter((record) => !matchedRecordKeys.has(record.recordKey))
-    .filter((record) => record.truncated && canMatchTruncatedName(row.normalizedName, record.matchStem))
+    .filter(
+      (record) =>
+        (record.truncated && canMatchTruncatedName(row.normalizedName, record.matchStem)) ||
+        canMatchShortenedName(row.normalizedName, record.matchStem),
+    )
     .sort((left, right) => right.matchStem.length - left.matchStem.length)
 
   if (truncatedMatches.length === 0) {
@@ -1454,13 +1477,13 @@ function resolveSheetRowForPdfRecord(
     return exactMatches[0]
   }
 
-  if (!pdfRecord.truncated) {
-    return null
-  }
-
   const truncatedMatches = sheetLookup.rows
     .filter((row) => !usedRowNumbers.has(row.rowNumber))
-    .filter((row) => canMatchTruncatedName(row.normalizedName, pdfRecord.matchStem))
+    .filter(
+      (row) =>
+        (pdfRecord.truncated && canMatchTruncatedName(row.normalizedName, pdfRecord.matchStem)) ||
+        canMatchShortenedName(row.normalizedName, pdfRecord.matchStem),
+    )
     .sort((left, right) => left.normalizedName.length - right.normalizedName.length)
 
   return truncatedMatches[0] || null
