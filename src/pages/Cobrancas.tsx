@@ -32,17 +32,17 @@ type Filter = 'all' | 'overdue' | 'upcoming' | 'matched' | 'unmatched';
 const LOCAL_EMAIL_BINDINGS_KEY = 'billing-email-bindings';
 
 const DEFAULT_EMAIL_MESSAGE =
-  'OlÃ¡, {nome}. Tudo bem?\n\n' +
-  'AtravÃ©s deste e-mail, informamos o lembrete de vencimento do seu contrato de honorÃ¡rios junto ao escritÃ³rio Modaelli Advogados.\n\n' +
-  'Refere-se Ã  parcela de abril no valor de R$ {valor}, com vencimento para o dia {vencimento}.\n\n' +
+  'Olá, {nome}. Tudo bem?\n\n' +
+  'Através deste e-mail, informamos o lembrete de vencimento do seu contrato de honorários junto ao escritório Modaelli Advogados.\n\n' +
+  'Refere-se à parcela de abril no valor de R$ {valor}, com vencimento para o dia {vencimento}.\n\n' +
   'Para pagamento via PIX, segue nossa chave:\n' +
   'Modaelli Sociedade de Advogados\n' +
   'CNPJ: 48.697.725/0001-07\n\n' +
-  'No momento da realizaÃ§Ã£o do PIX, aparecerÃ¡ o seguinte nome:\n' +
-  'Grupo MMM ou Grupo M IntermediaÃ§Ãµes\n\n' +
+  'No momento da realização do PIX, aparecerá o seguinte nome:\n' +
+  'Grupo MMM ou Grupo M Intermediações\n\n' +
   'Por gentileza, nos envie o comprovante para registrarmos a baixa no sistema.\n\n' +
-  'Pedimos que desconsidere este e-mail caso o pagamento jÃ¡ tenha sido efetuado.\n\n' +
-  'Estamos Ã  disposiÃ§Ã£o em caso de dÃºvidas.\n\n' +
+  'Pedimos que desconsidere este e-mail caso o pagamento já tenha sido efetuado.\n\n' +
+  'Estamos à disposição em caso de dúvidas.\n\n' +
   'Atenciosamente,\nEquipe Financeira\nModaelli Advogados';
 
 function normalizeText(value: string) {
@@ -102,13 +102,13 @@ function getUploadSummary(files: File[]) {
 
 function downloadExcelTemplate() {
   const rows = [
-    ['Cliente', 'E-mail', 'Vencimento', 'Valor', 'ObservaÃ§Ã£o'],
-    ['Nome do Cliente Exemplo', 'cliente@exemplo.com', '10/05/2026', 1500.0, 'Parcela de honorÃ¡rios'],
+    ['Cliente', 'E-mail', 'Vencimento', 'Valor', 'Observação'],
+    ['Nome do Cliente Exemplo', 'cliente@exemplo.com', '10/05/2026', 1500.0, 'Parcela de honorários'],
   ];
   const worksheet = XLSX.utils.aoa_to_sheet(rows);
   worksheet['!cols'] = [{ wch: 32 }, { wch: 32 }, { wch: 14 }, { wch: 14 }, { wch: 28 }];
   const workbook = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(workbook, worksheet, 'CobranÃ§as');
+  XLSX.utils.book_append_sheet(workbook, worksheet, 'Cobranças');
   XLSX.writeFile(workbook, 'modelo-cobrancas-modaelli.xlsx');
 }
 
@@ -184,7 +184,7 @@ function getFunctionErrorMessage(error: unknown) {
   const lower = message.toLowerCase();
 
   if (lower.includes('functions_http_error') || lower.includes('edge function returned a non-2xx status code')) {
-    return 'A funÃ§Ã£o de envio respondeu com erro. Verifique se a funÃ§Ã£o send-billing-email estÃ¡ publicada e com as variÃ¡veis RESEND_API_KEY e SUPABASE_SERVICE_ROLE_KEY configuradas.';
+    return 'A função de envio respondeu com erro. Verifique se a função send-billing-email está publicada e com as variáveis RESEND_API_KEY e SUPABASE_SERVICE_ROLE_KEY configuradas.';
   }
 
   if (
@@ -194,7 +194,7 @@ function getFunctionErrorMessage(error: unknown) {
     lower.includes('403') ||
     lower.includes('validation_error')
   ) {
-    return 'O Resend bloqueou o envio porque o domÃ­nio/remetente ainda nÃ£o foi verificado. Depois de verificar o domÃ­nio da Modaelli, o envio para clientes externos fica liberado.';
+    return 'O Resend bloqueou o envio porque o domínio/remetente ainda não foi verificado. Depois de verificar o domínio da Modaelli, o envio para clientes externos fica liberado.';
   }
 
   if (
@@ -203,11 +203,11 @@ function getFunctionErrorMessage(error: unknown) {
     lower.includes('functions_fetch_error') ||
     lower.includes('network')
   ) {
-    return 'NÃ£o foi possÃ­vel alcanÃ§ar o serviÃ§o de envio. Confira a publicaÃ§Ã£o da funÃ§Ã£o send-billing-email no Supabase.';
+    return 'Não foi possível alcançar o serviço de envio. Confira a publicação da função send-billing-email no Supabase.';
   }
 
   if (lower.includes('not found') || lower.includes('404')) {
-    return 'A funÃ§Ã£o send-billing-email nÃ£o foi encontrada no Supabase. Ela precisa estar publicada para o envio funcionar.';
+    return 'A função send-billing-email não foi encontrada no Supabase. Ela precisa estar publicada para o envio funcionar.';
   }
 
   return message;
@@ -338,7 +338,7 @@ export default function Cobrancas() {
 
     if (supportedFiles.length === 0) {
       toast({
-        title: 'Arquivo invÃ¡lido',
+        title: 'Arquivo inválido',
         description: 'Selecione um PDF, XLS/XLSX ou HTML exportado do contas a receber.',
         variant: 'destructive',
       });
@@ -353,7 +353,7 @@ export default function Cobrancas() {
       if (extracted.length === 0) {
         toast({
           title: 'Nenhum registro encontrado',
-          description: 'NÃ£o foi possÃ­vel encontrar cliente, vencimento e valor nesses arquivos.',
+          description: 'Não foi possível encontrar cliente, vencimento e valor nesses arquivos.',
           variant: 'destructive',
         });
         setRecords([]);
@@ -378,7 +378,7 @@ export default function Cobrancas() {
         title: `${matched.length} registro(s) carregado(s)`,
         description:
           unmatchedCount > 0
-            ? `${linkedCount} com e-mail vinculado e ${unmatchedCount} aguardando vÃ­nculo.`
+            ? `${linkedCount} com e-mail vinculado e ${unmatchedCount} aguardando vínculo.`
             : 'Todos os registros foram vinculados automaticamente.',
       });
     } catch (error) {
@@ -419,8 +419,8 @@ export default function Cobrancas() {
 
     if (!isValidEmail(email)) {
       toast({
-        title: 'E-mail invÃ¡lido',
-        description: 'Digite um e-mail vÃ¡lido para vincular esta cobranÃ§a.',
+        title: 'E-mail inválido',
+        description: 'Digite um e-mail válido para vincular esta cobrança.',
         variant: 'destructive',
       });
       return;
@@ -497,7 +497,7 @@ export default function Cobrancas() {
           }
         } else {
           if (!data?.id) {
-            throw new Error('NÃ£o foi possÃ­vel identificar o cliente criado.');
+            throw new Error('Não foi possível identificar o cliente criado.');
           }
 
           clientId = data.id;
@@ -531,16 +531,16 @@ export default function Cobrancas() {
           ? createdClient
             ? 'Cliente criado e vinculado'
             : 'Cliente atualizado e vinculado'
-          : 'E-mail vinculado na cobranÃ§a',
+          : 'E-mail vinculado na cobrança',
         description: persistedToDatabase
           ? createdClient
-            ? `${email} foi salvo em Clientes e vinculado a esta cobranÃ§a.`
-            : `${email} foi salvo no cadastro do cliente e vinculado a esta cobranÃ§a.`
-          : `${email} ficou vinculado nesta cobranÃ§a e salvo localmente para os prÃ³ximos envios.`,
+            ? `${email} foi salvo em Clientes e vinculado a esta cobrança.`
+            : `${email} foi salvo no cadastro do cliente e vinculado a esta cobrança.`
+          : `${email} ficou vinculado nesta cobrança e salvo localmente para os próximos envios.`,
       });
     } catch (error) {
       toast({
-        title: 'NÃ£o foi possÃ­vel vincular o e-mail',
+        title: 'Não foi possível vincular o e-mail',
         description: getErrorMessage(error),
         variant: 'destructive',
       });
@@ -651,14 +651,14 @@ export default function Cobrancas() {
       });
 
       if (uniqueRecords.length === 0) {
-        throw new Error('Nenhuma cobranÃ§a selecionada possui e-mail vÃ¡lido para envio.');
+        throw new Error('Nenhuma cobrança selecionada possui e-mail válido para envio.');
       }
 
       const result = await sendBillingEmailRequest(uniqueRecords, emailMessage);
 
       if (result.failed > 0 && result.sent === 0) {
         const firstError = result.results?.find((resultItem) => !resultItem.success && resultItem.error)?.error;
-        throw new Error(firstError || 'Nenhuma cobranÃ§a foi enviada.');
+        throw new Error(firstError || 'Nenhuma cobrança foi enviada.');
       }
 
       return result;
@@ -666,14 +666,14 @@ export default function Cobrancas() {
     onSuccess: (data) => {
       const message =
         data.failed > 0
-          ? `${data.sent} envio(s) concluÃ­dos e ${data.failed} falha(s).`
-          : `${data.sent} cobranÃ§a(s) enviada(s) com sucesso!`;
+          ? `${data.sent} envio(s) concluídos e ${data.failed} falha(s).`
+          : `${data.sent} cobrança(s) enviada(s) com sucesso!`;
 
       const firstError = data.results?.find((result) => !result.success && result.error)?.error;
 
       toast({
         title: message,
-        description: data.failed > 0 ? firstError || 'Alguns registros nÃ£o puderam ser enviados.' : undefined,
+        description: data.failed > 0 ? firstError || 'Alguns registros não puderam ser enviados.' : undefined,
       });
 
       const successfulEmails = getSuccessfulEmails(data);
@@ -692,7 +692,7 @@ export default function Cobrancas() {
     },
     onError: (error) => {
       toast({
-        title: 'Erro ao enviar cobranÃ§as',
+        title: 'Erro ao enviar cobranças',
         description: getFunctionErrorMessage(error),
         variant: 'destructive',
       });
@@ -712,13 +712,13 @@ export default function Cobrancas() {
     {
       title: 'Registros lidos',
       value: summary.total,
-      subtitle: 'Linhas extraÃ­das do arquivo importado.',
+      subtitle: 'Linhas extraídas do arquivo importado.',
       icon: FileText,
     },
     {
       title: 'Com e-mail',
       value: summary.linked,
-      subtitle: 'Prontas para comunicaÃ§Ã£o automÃ¡tica.',
+      subtitle: 'Prontas para comunicação automática.',
       icon: Link2,
     },
     {
@@ -730,7 +730,7 @@ export default function Cobrancas() {
     {
       title: 'Valor selecionado',
       value: `R$ ${summary.selectedAmount.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}`,
-      subtitle: 'Base usada no prÃ³ximo disparo.',
+      subtitle: 'Base usada no próximo disparo.',
       icon: Send,
     },
   ];
@@ -740,14 +740,14 @@ export default function Cobrancas() {
       <section className="overflow-hidden rounded-[1.75rem] border border-border/70 bg-[linear-gradient(135deg,rgba(18,31,49,0.96),rgba(28,46,73,0.88))] text-white shadow-[0_26px_80px_rgba(15,23,42,0.18)]">
         <div className="grid gap-8 px-6 py-7 lg:grid-cols-[1.15fr_0.85fr] lg:px-8">
           <div className="space-y-4">
-            <p className="text-xs font-semibold uppercase tracking-[0.34em] text-slate-300">OperaÃ§Ã£o de cobranÃ§as</p>
+            <p className="text-xs font-semibold uppercase tracking-[0.34em] text-slate-300">Operação de cobranças</p>
             <div className="space-y-3">
               <h1 className="max-w-2xl text-3xl font-semibold tracking-tight sm:text-4xl">
-                Leitura, vinculaÃ§Ã£o e envio com a mesma sobriedade da marca Modaelli.
+                Leitura, vinculação e envio com a mesma sobriedade da marca Modaelli.
               </h1>
               <p className="max-w-2xl text-sm leading-6 text-slate-300">
-                Importe arquivos do contas a receber, revise correspondÃªncias, ajuste casos sem vÃ­nculo e dispare a
-                comunicaÃ§Ã£o em um fluxo pensado para a rotina do escritÃ³rio.
+                Importe arquivos do contas a receber, revise correspondências, ajuste casos sem vínculo e dispare a
+                comunicação em um fluxo pensado para a rotina do escritório.
               </p>
             </div>
           </div>
@@ -757,7 +757,7 @@ export default function Cobrancas() {
               <p className="text-xs uppercase tracking-[0.18em] text-slate-300">Janela operacional</p>
               <p className="mt-3 text-3xl font-semibold text-white">{summary.total}</p>
               <p className="mt-2 text-sm text-slate-300">
-                registros em anÃ¡lise nesta tela, com filtros e revisÃ£o antes do disparo.
+                registros em análise nesta tela, com filtros e revisão antes do disparo.
               </p>
             </div>
             <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
@@ -775,9 +775,9 @@ export default function Cobrancas() {
       <Tabs defaultValue="importadas" className="space-y-6">
         <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
           <div>
-            <h2 className="text-2xl font-semibold tracking-tight">Central de CobranÃ§as</h2>
+            <h2 className="text-2xl font-semibold tracking-tight">Central de Cobranças</h2>
             <p className="mt-1 text-sm text-muted-foreground">
-              Trabalhe cobranÃ§as importadas e manuais no mesmo lugar.
+              Trabalhe cobranças importadas e manuais no mesmo lugar.
             </p>
           </div>
           <TabsList className="h-auto rounded-2xl bg-muted/60 p-1">
@@ -834,7 +834,7 @@ export default function Cobrancas() {
                   <Upload className="h-8 w-8" />
                 </div>
                 <div className="space-y-2">
-                  <p className="text-base font-medium">Envie o PDF ou a planilha Excel da cobranÃ§a</p>
+                  <p className="text-base font-medium">Envie o PDF ou a planilha Excel da cobrança</p>
                   <p className="text-sm leading-6 text-muted-foreground">
                     A leitura aceita <span className="font-medium">.xls</span>, <span className="font-medium">.xlsx</span>, PDF e HTML exportado.
                   </p>
@@ -852,7 +852,7 @@ export default function Cobrancas() {
                     Baixar modelo Excel
                   </Button>
                   {uploadedFileName ? (
-                    <p className="text-xs font-medium text-foreground">Ãšltimo upload: {uploadedFileName}</p>
+                    <p className="text-xs font-medium text-foreground">Último upload: {uploadedFileName}</p>
                   ) : null}
                 </div>
               </>
@@ -877,7 +877,7 @@ export default function Cobrancas() {
               value={emailMessage}
               onChange={(event) => setEmailMessage(event.target.value)}
               rows={9}
-              placeholder="Escreva a mensagem do e-mail de cobranÃ§a..."
+              placeholder="Escreva a mensagem do e-mail de cobrança..."
               className="rounded-2xl border-border/70 bg-background/80"
             />
           </CardContent>
@@ -885,7 +885,7 @@ export default function Cobrancas() {
 
         <Card className="border-border/70 shadow-[0_14px_36px_rgba(15,23,42,0.06)]">
           <CardHeader>
-            <CardTitle className="text-lg">PrÃ©-visualizaÃ§Ã£o</CardTitle>
+            <CardTitle className="text-lg">Pré-visualização</CardTitle>
           </CardHeader>
           <CardContent>
             {emailPreview ? (
@@ -897,7 +897,7 @@ export default function Cobrancas() {
               </div>
             ) : (
               <div className="rounded-[1.4rem] border border-dashed border-border/70 p-5 text-sm leading-6 text-muted-foreground">
-              Carregue um arquivo com clientes vinculados para ver a prÃ©-visualizaÃ§Ã£o do e-mail.
+              Carregue um arquivo com clientes vinculados para ver a pré-visualização do e-mail.
               </div>
             )}
           </CardContent>
@@ -908,7 +908,7 @@ export default function Cobrancas() {
         <Card className="border-border/70 shadow-[0_14px_36px_rgba(15,23,42,0.06)]">
           <CardHeader className="gap-4 border-b border-border/60 pb-4 lg:flex-row lg:items-center lg:justify-between">
             <div className="space-y-1">
-              <CardTitle className="text-lg">RevisÃ£o dos registros</CardTitle>
+              <CardTitle className="text-lg">Revisão dos registros</CardTitle>
               <p className="text-sm text-muted-foreground">
                 Aplique filtros, complete e-mails ausentes e selecione apenas o que deve seguir para envio.
               </p>
@@ -918,7 +918,7 @@ export default function Cobrancas() {
               {([
                 ['all', 'Todos'],
                 ['overdue', 'Vencidos'],
-                ['upcoming', 'PrÃ³ximos 7 dias'],
+                ['upcoming', 'Próximos 7 dias'],
                 ['matched', 'Com e-mail'],
                 ['unmatched', 'Sem e-mail'],
               ] as [Filter, string][]).map(([key, label]) => (
@@ -938,27 +938,27 @@ export default function Cobrancas() {
           <CardContent className="space-y-4 p-5">
             <div className="grid gap-3 md:grid-cols-3">
               <div className="rounded-2xl border border-border/70 bg-background/80 p-4">
-                <p className="text-sm font-medium">Registros visÃ­veis</p>
+                <p className="text-sm font-medium">Registros visíveis</p>
                 <p className="mt-2 text-2xl font-semibold">{filteredRecords.length}</p>
                 <p className="mt-1 text-xs text-muted-foreground">Total exibido no filtro atual.</p>
               </div>
               <div className="rounded-2xl border border-border/70 bg-background/80 p-4">
                 <p className="text-sm font-medium">Prontos para envio</p>
                 <p className="mt-2 text-2xl font-semibold">{selectedRecords.length}</p>
-                <p className="mt-1 text-xs text-muted-foreground">Selecionados com e-mail vÃ¡lido.</p>
+                <p className="mt-1 text-xs text-muted-foreground">Selecionados com e-mail válido.</p>
               </div>
               <div className="rounded-2xl border border-border/70 bg-background/80 p-4">
                 <p className="text-sm font-medium">Valor filtrado</p>
                 <p className="mt-2 text-2xl font-semibold">
                   R$ {totalAmount.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
                 </p>
-                <p className="mt-1 text-xs text-muted-foreground">Escopo financeiro em anÃ¡lise.</p>
+                <p className="mt-1 text-xs text-muted-foreground">Escopo financeiro em análise.</p>
               </div>
             </div>
 
             <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
               <div className="text-sm text-muted-foreground">
-                {filteredRecords.length} registro(s) visÃ­veis, {selectedRecords.length} pronto(s) para envio.
+                {filteredRecords.length} registro(s) visíveis, {selectedRecords.length} pronto(s) para envio.
               </div>
 
               <div className="flex flex-wrap gap-2">
@@ -971,8 +971,8 @@ export default function Cobrancas() {
                   disabled={selectableFilteredIds.length === 0}
                 >
                   {selectedFilteredCount === selectableFilteredIds.length && selectableFilteredIds.length > 0
-                    ? 'Limpar seleÃ§Ã£o'
-                    : 'Selecionar visÃ­veis'}
+                    ? 'Limpar seleção'
+                    : 'Selecionar visíveis'}
                 </Button>
                 <Button
                   type="button"
@@ -1023,7 +1023,7 @@ export default function Cobrancas() {
                     <TableHead>Nome</TableHead>
                     <TableHead>Vencimento</TableHead>
                     <TableHead>Valor</TableHead>
-                    <TableHead>E-mail / VÃ­nculo</TableHead>
+                    <TableHead>E-mail / Vínculo</TableHead>
                     <TableHead>Status</TableHead>
                   </TableRow>
                 </TableHeader>
@@ -1057,7 +1057,7 @@ export default function Cobrancas() {
                             <>
                               <span className="flex items-center gap-1 text-sm text-destructive">
                                 <AlertCircle className="h-3 w-3" />
-                                NÃ£o vinculado
+                                Não vinculado
                               </span>
                               <div className="flex min-w-[260px] gap-2">
                                 <Input
@@ -1104,7 +1104,7 @@ export default function Cobrancas() {
                                 ? 'Vencido'
                                 : record.status === 'matched'
                                   ? 'Vinculado'
-                                  : 'Sem vÃ­nculo'}
+                                  : 'Sem vínculo'}
                           </Badge>
                         </TableCell>
                       </TableRow>

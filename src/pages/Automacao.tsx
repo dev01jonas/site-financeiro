@@ -437,13 +437,13 @@ export default function Automacao() {
     {
       title: 'Atualizados',
       value: automationDashboard?.updated ?? 0,
-      subtitle: `${automationDashboard?.refreshed ?? 0} linha(s) sÃ³ com data`,
+      subtitle: `${automationDashboard?.refreshed ?? 0} linha(s) só com data`,
       icon: CheckCircle2,
     },
     {
       title: 'Novos clientes',
       value: automationDashboard?.created ?? 0,
-      subtitle: 'Linhas criadas nesta execuÃ§Ã£o',
+      subtitle: 'Linhas criadas nesta execução',
       icon: FileSpreadsheet,
     },
     {
@@ -464,19 +464,19 @@ export default function Automacao() {
     {
       title: 'Valor em aberto',
       value: automationDashboard ? formatCompactCurrency(automationDashboard.financial.openAmount) : '-',
-      subtitle: automationDashboard ? formatCurrency(automationDashboard.financial.openAmount) : 'Sem execuÃ§Ã£o ainda',
+      subtitle: automationDashboard ? formatCurrency(automationDashboard.financial.openAmount) : 'Sem execução ainda',
       icon: CircleDollarSign,
     },
     {
       title: 'Valor pago',
       value: automationDashboard ? formatCompactCurrency(automationDashboard.financial.paidAmount) : '-',
-      subtitle: automationDashboard ? formatCurrency(automationDashboard.financial.paidAmount) : 'Sem execuÃ§Ã£o ainda',
+      subtitle: automationDashboard ? formatCurrency(automationDashboard.financial.paidAmount) : 'Sem execução ainda',
       icon: Wallet,
     },
     {
       title: 'Valor a vencer',
       value: automationDashboard ? formatCompactCurrency(automationDashboard.financial.upcomingAmount) : '-',
-      subtitle: automationDashboard ? formatCurrency(automationDashboard.financial.upcomingAmount) : 'Sem execuÃ§Ã£o ainda',
+      subtitle: automationDashboard ? formatCurrency(automationDashboard.financial.upcomingAmount) : 'Sem execução ainda',
       icon: Activity,
     },
   ];
@@ -617,22 +617,22 @@ export default function Automacao() {
             <div>
               <CardTitle className="flex items-center gap-2 text-lg">
                 <LayoutDashboard className="h-5 w-5 text-accent" />
-                Dashboard da automaÃ§Ã£o
+                Dashboard da automação
               </CardTitle>
               <p className="mt-1 text-sm text-muted-foreground">
-                Resumo da Ãºltima rodada com volume operacional, financeiro, rÃ©gua de cobranÃ§a e distribuiÃ§Ã£o de status.
+                Resumo da última rodada com volume operacional, financeiro, régua de cobrança e distribuição de status.
               </p>
             </div>
             {lastResult ? (
               <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
                 <Badge variant={lastResult.dryRun ? 'secondary' : 'default'} className="rounded-xl px-3 py-1">
-                  {lastResult.dryRun ? 'Modo teste' : 'ExecuÃ§Ã£o real'}
+                  {lastResult.dryRun ? 'Modo teste' : 'Execução real'}
                 </Badge>
                 <Badge variant="outline" className="rounded-xl px-3 py-1">
-                  {lastResult.timestamp || 'Sem horÃ¡rio'}
+                  {lastResult.timestamp || 'Sem horário'}
                 </Badge>
                 <Badge variant="secondary" className="rounded-xl px-3 py-1">
-                  {lastResult.pdfFileName || 'Arquivo nÃ£o informado'}
+                  {lastResult.pdfFileName || 'Arquivo não informado'}
                 </Badge>
               </div>
             ) : null}
@@ -678,7 +678,7 @@ export default function Automacao() {
               <div className="mb-4 flex items-center gap-2">
                 <Trello className="h-4 w-4 text-accent" />
                 <div>
-                  <p className="text-sm font-medium">RÃ©gua de cobranÃ§a</p>
+                  <p className="text-sm font-medium">Régua de cobrança</p>
                   <p className="text-xs text-muted-foreground">Clientes tratados por etapa na rodada atual.</p>
                 </div>
               </div>
@@ -706,7 +706,7 @@ export default function Automacao() {
                 </ChartContainer>
               ) : (
                 <div className="flex h-[300px] items-center justify-center rounded-2xl border border-dashed border-border/70 text-sm text-muted-foreground">
-                  Execute a automaÃ§Ã£o para ver a rÃ©gua da rodada.
+                  Execute a automação para ver a régua da rodada.
                 </div>
               )}
             </div>
@@ -717,7 +717,7 @@ export default function Automacao() {
                   <ShieldCheck className="h-4 w-4 text-accent" />
                   <div>
                     <p className="text-sm font-medium">ATIVO x INATIVO</p>
-                    <p className="text-xs text-muted-foreground">DistribuiÃ§Ã£o de status dos clientes tratados.</p>
+                    <p className="text-xs text-muted-foreground">Distribuição de status dos clientes tratados.</p>
                   </div>
                 </div>
                 {automationDashboard && automationDashboard.recordStatusBreakdown.length > 0 ? (
@@ -741,7 +741,7 @@ export default function Automacao() {
                   </ChartContainer>
                 ) : (
                   <div className="flex h-[220px] items-center justify-center rounded-2xl border border-dashed border-border/70 text-sm text-muted-foreground">
-                    Sem dados de status atÃ© a primeira execuÃ§Ã£o.
+                    Sem dados de status até a primeira execução.
                   </div>
                 )}
               </div>
@@ -750,8 +750,8 @@ export default function Automacao() {
                 <div className="mb-3 flex items-center gap-2">
                   <History className="h-4 w-4 text-accent" />
                   <div>
-                    <p className="text-sm font-medium">AÃ§Ãµes executadas</p>
-                    <p className="text-xs text-muted-foreground">Resumo do que a automaÃ§Ã£o alterou ou criou.</p>
+                    <p className="text-sm font-medium">Ações executadas</p>
+                    <p className="text-xs text-muted-foreground">Resumo do que a automação alterou ou criou.</p>
                   </div>
                 </div>
                 <div className="space-y-3">
@@ -780,7 +780,7 @@ export default function Automacao() {
                     })
                   ) : (
                     <div className="rounded-2xl border border-dashed border-border/70 px-4 py-8 text-center text-sm text-muted-foreground">
-                      Sem aÃ§Ãµes registradas atÃ© a primeira execuÃ§Ã£o.
+                      Sem ações registradas até a primeira execução.
                     </div>
                   )}
                 </div>
