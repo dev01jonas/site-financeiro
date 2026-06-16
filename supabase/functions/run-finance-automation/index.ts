@@ -58,6 +58,7 @@ type AutomationBody = {
   sheetName?: string
   pdfFileName?: string
   pdfRecords?: PdfRecord[]
+  clearLog?: boolean
   selectedProcessMatches?: Record<string, string> | Array<{ recordKey: string; selectionId: string }>
 }
 
@@ -1119,20 +1120,30 @@ class GoogleSheetsService {
     })
   }
 
-  async appendLogRows(rows: SheetValues) {
-    await this.request('/values:batchClear', {
-      method: 'POST',
-      body: JSON.stringify({
-        ranges: [`${quoteSheetName(LOG_SHEET_NAME)}!A2:I5000`],
-      }),
-    })
+  async appendLogRows(rows: SheetValues, clearExisting = true) {
+    if (clearExisting) {
+      await this.request('/values:batchClear', {
+        method: 'POST',
+        body: JSON.stringify({
+          ranges: [`${quoteSheetName(LOG_SHEET_NAME)}!A2:I5000`],
+        }),
+      })
+    }
 
     if (rows.length === 0) return
 
-    await this.updateValues(
-      `${quoteSheetName(LOG_SHEET_NAME)}!A2:I${rows.length + 1}`,
-      rows,
-    )
+    if (clearExisting) {
+      await this.updateValues(
+        `${quoteSheetName(LOG_SHEET_NAME)}!A2:I${rows.length + 1}`,
+        rows,
+      )
+      return
+    }
+
+    await this.request(`/values/${encodeURIComponent(`${quoteSheetName(LOG_SHEET_NAME)}!A2:I2`)}:append?valueInputOption=USER_ENTERED&insertDataOption=INSERT_ROWS`, {
+      method: 'POST',
+      body: JSON.stringify({ values: rows }),
+    })
   }
 }
 
@@ -1143,8 +1154,6 @@ class TrelloService {
   listIds: Set<string>
   listNameCache = new Map<string, string>()
   clientLookupCache = new Map<string, Promise<TrelloLookupResult>>()
-  boardCardsCache: Promise<TrelloCard[]> | null = null
-  boardListsCache: Promise<void> | null = null
   baseUrl = 'https://api.trello.com/1'
 
   constructor(apiKey: string | null, token: string | null, boardId: string | null, listIds: string[]) {
@@ -1238,30 +1247,11 @@ class TrelloService {
   }
 
   async searchCards(clientName: string): Promise<TrelloCard[]> {
-    if (this.boardId) {
-      const cards = await this.getBoardCards()
-      const normalizedClientName = normalizeClientName(clientName)
-      const clientTokens = normalizedClientName.split(' ').filter((token) => token.length >= 3)
-
-      return cards.filter((card) => {
-        if (card.closed) return false
-        if (this.listIds.size > 0 && card.idList && !this.listIds.has(card.idList)) return false
-
-        const cardName = normalizeClientName(card.name)
-        const cardDescription = normalizeClientName(card.desc)
-        if (!cardName && !cardDescription) return false
-
-        if (cardName.includes(normalizedClientName) || normalizedClientName.includes(cardName)) return true
-
-        return clientTokens.some((token) => cardName.includes(token) || cardDescription.includes(token))
-      })
-    }
-
     const params: Record<string, string> = {
       query: clientName,
       modelTypes: 'cards',
       card_fields: 'name,desc,idBoard,idList,shortUrl,url,due,dateLastActivity,closed,labels',
-      cards_limit: '20',
+      cards_limit: '8',
     }
     if (this.boardId) params.idBoards = this.boardId
 
@@ -1272,31 +1262,6 @@ class TrelloService {
       if (this.listIds.size > 0 && card.idList && !this.listIds.has(card.idList)) return false
       return true
     })
-  }
-
-  async getBoardCards(): Promise<TrelloCard[]> {
-    if (!this.boardId) return []
-    if (!this.boardCardsCache) {
-      this.boardCardsCache = this.get(`/boards/${this.boardId}/cards`, {
-        fields: 'name,desc,idBoard,idList,shortUrl,url,due,dateLastActivity,closed,labels',
-      }).then((payload) => ((Array.isArray(payload) ? payload : []) as TrelloCard[]))
-    }
-
-    if (!this.boardListsCache) {
-      this.boardListsCache = this.get(`/boards/${this.boardId}/lists`, { fields: 'name' })
-        .then((payload) => {
-          const lists = (Array.isArray(payload) ? payload : []) as Array<{ id?: string; name?: string }>
-          lists.forEach((list) => {
-            if (list.id && list.name) {
-              this.listNameCache.set(list.id, list.name)
-            }
-          })
-        })
-        .catch(() => undefined)
-    }
-
-    await this.boardListsCache
-    return this.boardCardsCache
   }
 
   chooseBestCard(clientName: string, cards: TrelloCard[]) {
@@ -1870,6 +1835,7 @@ async function runAutomation(req: Request): Promise<AutomationResult> {
   const maxRows = Number.isFinite(parsedMaxRows) && parsedMaxRows > 0 ? parsedMaxRows : 0
   const startRow = Number.isFinite(parsedStartRow) && parsedStartRow >= 2 ? parsedStartRow : 2
   const pdfRecords = Array.isArray(body.pdfRecords) ? body.pdfRecords : []
+  const clearLog = body.clearLog !== false
   const selectedProcessMatches = normalizeSelectedProcessMatches(body.selectedProcessMatches)
 
   if (!spreadsheetId) {
@@ -1896,7 +1862,7 @@ async function runAutomation(req: Request): Promise<AutomationResult> {
         cardUrl: '',
       }),
     ]
-    await sheets.appendLogRows(errorRows)
+    await sheets.appendLogRows(errorRows, clearLog)
     await sheets.updateLogDashboard({
       timestamp,
       dryRun,
@@ -2207,7 +2173,7 @@ async function runAutomation(req: Request): Promise<AutomationResult> {
       }
     }
 
-    await sheets.appendLogRows(logEntries.map(buildLogRow))
+    await sheets.appendLogRows(logEntries.map(buildLogRow), clearLog)
 
     if (updateFailureMessage) {
       throw new Error(updateFailureMessage)
@@ -2605,7 +2571,7 @@ async function runAutomation(req: Request): Promise<AutomationResult> {
     }
   }
 
-  await sheets.appendLogRows(logEntries.map(buildLogRow))
+  await sheets.appendLogRows(logEntries.map(buildLogRow), clearLog)
 
   if (updateFailureMessage) {
     throw new Error(updateFailureMessage)

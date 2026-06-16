@@ -113,6 +113,17 @@ type PendingProcessSelection = {
   options: ProcessOption[];
 };
 
+type AutomationRequestPayload = {
+  dryRun: boolean;
+  sheetName?: string;
+  pdfFileName?: string;
+  pdfRecords: ExtractedRecord[];
+  clearLog?: boolean;
+  selectedProcessMatches?: Record<string, string>;
+};
+
+const AUTOMATION_BATCH_SIZE = 25;
+
 function getErrorMessage(error: unknown) {
   if (error instanceof Error) return error.message;
   if (typeof error === 'string') return error;
@@ -163,13 +174,7 @@ function getFunctionErrorMessage(error: unknown) {
   return message;
 }
 
-async function runAutomationRequest(payload: {
-  dryRun: boolean;
-  sheetName?: string;
-  pdfFileName?: string;
-  pdfRecords: ExtractedRecord[];
-  selectedProcessMatches?: Record<string, string>;
-}) {
+async function runAutomationRequest(payload: AutomationRequestPayload) {
   const invokeResult = await supabase.functions.invoke<AutomationResult>('run-finance-automation', {
     body: payload,
   });
@@ -218,6 +223,127 @@ async function runAutomationRequest(payload: {
   }
 
   return detailPayload as AutomationResult;
+}
+
+function mergeMetricArrays(current: AutomationMetric[] = [], incoming: AutomationMetric[] = []) {
+  const map = new Map<string, number>();
+
+  [...current, ...incoming].forEach((item) => {
+    map.set(item.label, (map.get(item.label) || 0) + item.value);
+  });
+
+  return [...map.entries()].map(([label, value]) => ({ label, value }));
+}
+
+function mergePendingSelections(
+  current: PendingProcessSelection[] = [],
+  incoming: PendingProcessSelection[] = [],
+) {
+  const map = new Map<string, PendingProcessSelection>();
+
+  [...current, ...incoming].forEach((item) => {
+    map.set(item.recordKey, item);
+  });
+
+  return [...map.values()];
+}
+
+function mergeAutomationResults(
+  current: AutomationResult | null,
+  incoming: AutomationResult,
+): AutomationResult {
+  if (!current) {
+    return {
+      ...incoming,
+      preview: [...incoming.preview],
+      pendingSelections: [...incoming.pendingSelections],
+      dashboard: incoming.dashboard
+        ? {
+            ...incoming.dashboard,
+            financial: { ...incoming.dashboard.financial },
+            stageBreakdown: [...incoming.dashboard.stageBreakdown],
+            recordStatusBreakdown: [...incoming.dashboard.recordStatusBreakdown],
+            actionBreakdown: [...incoming.dashboard.actionBreakdown],
+          }
+        : incoming.dashboard,
+    };
+  }
+
+  const pendingSelections = mergePendingSelections(current.pendingSelections, incoming.pendingSelections);
+
+  return {
+    ...incoming,
+    processed: current.processed + incoming.processed,
+    skipped: current.skipped + incoming.skipped,
+    matched: current.matched + incoming.matched,
+    updated: current.updated + incoming.updated,
+    refreshed: current.refreshed + incoming.refreshed,
+    ignored: current.ignored + incoming.ignored,
+    notFound: current.notFound + incoming.notFound,
+    errors: current.errors + incoming.errors,
+    updatedCells: current.updatedCells + incoming.updatedCells,
+    logRows: current.logRows + incoming.logRows,
+    preview: [...current.preview, ...incoming.preview],
+    pendingCount: pendingSelections.length,
+    pendingSelections,
+    dashboard:
+      current.dashboard || incoming.dashboard
+        ? {
+            created: (current.dashboard?.created || 0) + (incoming.dashboard?.created || 0),
+            updated: (current.dashboard?.updated || 0) + (incoming.dashboard?.updated || 0),
+            refreshed: (current.dashboard?.refreshed || 0) + (incoming.dashboard?.refreshed || 0),
+            pending: (current.dashboard?.pending || 0) + (incoming.dashboard?.pending || 0),
+            notFound: (current.dashboard?.notFound || 0) + (incoming.dashboard?.notFound || 0),
+            errors: (current.dashboard?.errors || 0) + (incoming.dashboard?.errors || 0),
+            matched: (current.dashboard?.matched || 0) + (incoming.dashboard?.matched || 0),
+            processed: (current.dashboard?.processed || 0) + (incoming.dashboard?.processed || 0),
+            financial: {
+              openAmount:
+                (current.dashboard?.financial.openAmount || 0) +
+                (incoming.dashboard?.financial.openAmount || 0),
+              paidAmount:
+                (current.dashboard?.financial.paidAmount || 0) +
+                (incoming.dashboard?.financial.paidAmount || 0),
+              upcomingAmount:
+                (current.dashboard?.financial.upcomingAmount || 0) +
+                (incoming.dashboard?.financial.upcomingAmount || 0),
+            },
+            stageBreakdown: mergeMetricArrays(
+              current.dashboard?.stageBreakdown,
+              incoming.dashboard?.stageBreakdown,
+            ),
+            recordStatusBreakdown: mergeMetricArrays(
+              current.dashboard?.recordStatusBreakdown,
+              incoming.dashboard?.recordStatusBreakdown,
+            ),
+            actionBreakdown: mergeMetricArrays(
+              current.dashboard?.actionBreakdown,
+              incoming.dashboard?.actionBreakdown,
+            ),
+          }
+        : undefined,
+  };
+}
+
+async function runAutomationInChunks(payload: AutomationRequestPayload) {
+  let mergedResult: AutomationResult | null = null;
+
+  for (let start = 0; start < payload.pdfRecords.length; start += AUTOMATION_BATCH_SIZE) {
+    const chunk = payload.pdfRecords.slice(start, start + AUTOMATION_BATCH_SIZE);
+    const chunkResult = await runAutomationRequest({
+      ...payload,
+      pdfRecords: chunk,
+      clearLog: start === 0,
+    });
+
+    mergedResult = mergeAutomationResults(mergedResult, chunkResult);
+  }
+
+  if (!mergedResult) {
+    throw new Error('A automação não retornou dados.');
+  }
+
+  return mergedResult;
 }
 
 function formatActionLabel(action: string) {
@@ -359,7 +485,7 @@ export default function Automacao() {
         selectedProcessMatches: selectedMatches,
       };
 
-      return runAutomationRequest(payload);
+      return runAutomationInChunks(payload);
     },
     onSuccess: (data) => {
       setLastResult(data);
