@@ -1143,6 +1143,8 @@ class TrelloService {
   listIds: Set<string>
   listNameCache = new Map<string, string>()
   clientLookupCache = new Map<string, Promise<TrelloLookupResult>>()
+  boardCardsCache: Promise<TrelloCard[]> | null = null
+  boardListsCache: Promise<void> | null = null
   baseUrl = 'https://api.trello.com/1'
 
   constructor(apiKey: string | null, token: string | null, boardId: string | null, listIds: string[]) {
@@ -1236,6 +1238,25 @@ class TrelloService {
   }
 
   async searchCards(clientName: string): Promise<TrelloCard[]> {
+    if (this.boardId) {
+      const cards = await this.getBoardCards()
+      const normalizedClientName = normalizeClientName(clientName)
+      const clientTokens = normalizedClientName.split(' ').filter((token) => token.length >= 3)
+
+      return cards.filter((card) => {
+        if (card.closed) return false
+        if (this.listIds.size > 0 && card.idList && !this.listIds.has(card.idList)) return false
+
+        const cardName = normalizeClientName(card.name)
+        const cardDescription = normalizeClientName(card.desc)
+        if (!cardName && !cardDescription) return false
+
+        if (cardName.includes(normalizedClientName) || normalizedClientName.includes(cardName)) return true
+
+        return clientTokens.some((token) => cardName.includes(token) || cardDescription.includes(token))
+      })
+    }
+
     const params: Record<string, string> = {
       query: clientName,
       modelTypes: 'cards',
@@ -1251,6 +1272,31 @@ class TrelloService {
       if (this.listIds.size > 0 && card.idList && !this.listIds.has(card.idList)) return false
       return true
     })
+  }
+
+  async getBoardCards(): Promise<TrelloCard[]> {
+    if (!this.boardId) return []
+    if (!this.boardCardsCache) {
+      this.boardCardsCache = this.get(`/boards/${this.boardId}/cards`, {
+        fields: 'name,desc,idBoard,idList,shortUrl,url,due,dateLastActivity,closed,labels',
+      }).then((payload) => ((Array.isArray(payload) ? payload : []) as TrelloCard[]))
+    }
+
+    if (!this.boardListsCache) {
+      this.boardListsCache = this.get(`/boards/${this.boardId}/lists`, { fields: 'name' })
+        .then((payload) => {
+          const lists = (Array.isArray(payload) ? payload : []) as Array<{ id?: string; name?: string }>
+          lists.forEach((list) => {
+            if (list.id && list.name) {
+              this.listNameCache.set(list.id, list.name)
+            }
+          })
+        })
+        .catch(() => undefined)
+    }
+
+    await this.boardListsCache
+    return this.boardCardsCache
   }
 
   chooseBestCard(clientName: string, cards: TrelloCard[]) {
@@ -1295,6 +1341,7 @@ class IntegraService {
   token: string | null
   searchPath: string
   nameParam: string
+  clientLookupCache = new Map<string, Promise<IntegraLookupResult>>()
 
   constructor() {
     this.baseUrl = Deno.env.get('INTEGRA_API_URL') || null
@@ -1308,6 +1355,18 @@ class IntegraService {
   }
 
   async lookupClient(clientName: string): Promise<IntegraLookupResult> {
+    const cacheKey = normalizeClientName(clientName)
+    const cached = this.clientLookupCache.get(cacheKey)
+    if (cached) {
+      return cached
+    }
+
+    const lookupPromise = this.lookupClientInternal(clientName)
+    this.clientLookupCache.set(cacheKey, lookupPromise)
+    return lookupPromise
+  }
+
+  async lookupClientInternal(clientName: string): Promise<IntegraLookupResult> {
     if (!this.baseUrl) {
       return {
         found: false,
