@@ -169,6 +169,30 @@ type AutomationPreviewRow = {
   cardUrl: string
 }
 
+type AutomationDashboardMetric = {
+  label: string
+  value: number
+}
+
+type AutomationDashboard = {
+  created: number
+  updated: number
+  refreshed: number
+  pending: number
+  notFound: number
+  errors: number
+  matched: number
+  processed: number
+  financial: {
+    openAmount: number
+    paidAmount: number
+    upcomingAmount: number
+  }
+  stageBreakdown: AutomationDashboardMetric[]
+  recordStatusBreakdown: AutomationDashboardMetric[]
+  actionBreakdown: AutomationDashboardMetric[]
+}
+
 type ProcessOption = {
   selectionId: string
   rowNumber: number
@@ -197,6 +221,8 @@ type PendingProcessSelection = {
 type AutomationResult = {
   dryRun: boolean
   sheetName: string
+  pdfFileName: string
+  timestamp: string
   startRow: number
   processed: number
   skipped: number
@@ -211,6 +237,7 @@ type AutomationResult = {
   preview: AutomationPreviewRow[]
   pendingCount: number
   pendingSelections: PendingProcessSelection[]
+  dashboard: AutomationDashboard
 }
 
 type LogDashboardSummary = {
@@ -1668,6 +1695,27 @@ function buildPreviewRow(entry: AutomationLogEntry): AutomationPreviewRow {
   }
 }
 
+function incrementMetric(map: Map<string, number>, label: string) {
+  if (!label) return
+  map.set(label, (map.get(label) || 0) + 1)
+}
+
+function metricMapToArray(map: Map<string, number>, preferredOrder: string[] = []) {
+  const remaining = new Set(map.keys())
+  const ordered = preferredOrder
+    .filter((label) => remaining.has(label))
+    .map((label) => {
+      remaining.delete(label)
+      return { label, value: map.get(label) || 0 }
+    })
+
+  const trailing = [...remaining]
+    .sort((left, right) => left.localeCompare(right, 'pt-BR'))
+    .map((label) => ({ label, value: map.get(label) || 0 }))
+
+  return [...ordered, ...trailing]
+}
+
 function addSheetRequest(
   requests: Array<{ range: string; values: SheetValues }>,
   sheetName: string,
@@ -1843,10 +1891,46 @@ async function runAutomation(req: Request): Promise<AutomationResult> {
     let errors = 0
     let matched = 0
     let notFound = 0
+    let createdClients = 0
+    let dashboardOpenAmount = 0
+    let dashboardPaidAmount = 0
+    let dashboardUpcomingAmount = 0
     const lastFilledRow = findLastFilledRow(sheetValues)
     let nextRowNumber = lastFilledRow + 1
     let maxRequestedRow =
       candidateRows.length > 0 ? Math.max(lastFilledRow, ...candidateRows.map((row) => row.rowNumber)) : lastFilledRow
+    const stageCounts = new Map<string, number>()
+    const recordStatusCounts = new Map<string, number>()
+    const actionCounts = new Map<string, number>()
+
+    const registerDashboardMetrics = (params: {
+      action: string
+      trelloStage: string
+      recordStatus: string
+      openAmount: number | null
+      paidAmount: number | null
+      upcomingAmount: number | null
+      created: boolean
+    }) => {
+      incrementMetric(
+        actionCounts,
+        params.created
+          ? 'Cliente adicionado'
+          : params.action === 'atualizado'
+            ? 'Atualizado'
+            : params.action === 'data_atualizada'
+              ? 'Só data'
+              : params.action,
+      )
+      incrementMetric(stageCounts, params.trelloStage || 'Sem régua definida')
+      incrementMetric(recordStatusCounts, params.recordStatus || 'ATIVO')
+      dashboardOpenAmount += params.openAmount || 0
+      dashboardPaidAmount += params.paidAmount || 0
+      dashboardUpcomingAmount += params.upcomingAmount || 0
+      if (params.created) {
+        createdClients += 1
+      }
+    }
 
     for (const pdfRecord of pdfIndex.records) {
       try {
@@ -1971,6 +2055,18 @@ async function runAutomation(req: Request): Promise<AutomationResult> {
           })
         }
 
+        if (isCreated || updatePlan.action === 'atualizado' || updatePlan.action === 'data_atualizada') {
+          registerDashboardMetrics({
+            action: isCreated ? 'cliente_adicionado' : updatePlan.action,
+            trelloStage: trello.situation,
+            recordStatus: deriveRecordStatus(trello),
+            openAmount: amounts.openAmount,
+            paidAmount: amounts.paidAmount,
+            upcomingAmount: amounts.upcomingAmount,
+            created: isCreated,
+          })
+        }
+
         if (errorParts.length > 0) {
           errors += 1
         }
@@ -2061,6 +2157,8 @@ async function runAutomation(req: Request): Promise<AutomationResult> {
     return {
       dryRun,
       sheetName,
+      pdfFileName: body.pdfFileName || '',
+      timestamp,
       startRow,
       processed: candidateRows.length,
       skipped: skippedRows,
@@ -2075,6 +2173,24 @@ async function runAutomation(req: Request): Promise<AutomationResult> {
       preview: logEntries.map(buildPreviewRow),
       pendingCount: pendingSelections.length,
       pendingSelections,
+      dashboard: {
+        created: createdClients,
+        updated,
+        refreshed,
+        pending: pendingSelections.length,
+        notFound,
+        errors,
+        matched,
+        processed: candidateRows.length,
+        financial: {
+          openAmount: dashboardOpenAmount,
+          paidAmount: dashboardPaidAmount,
+          upcomingAmount: dashboardUpcomingAmount,
+        },
+        stageBreakdown: metricMapToArray(stageCounts, [...REGUA_OPTIONS, 'Sem régua definida']),
+        recordStatusBreakdown: metricMapToArray(recordStatusCounts, ['ATIVO', 'INATIVO']),
+        actionBreakdown: metricMapToArray(actionCounts, ['Atualizado', 'Cliente adicionado', 'Só data']),
+      },
     }
   }
 
@@ -2439,6 +2555,8 @@ async function runAutomation(req: Request): Promise<AutomationResult> {
   return {
     dryRun,
     sheetName,
+    pdfFileName: body.pdfFileName || '',
+    timestamp,
     startRow,
     processed: sheetRows.length,
     skipped,
@@ -2449,10 +2567,28 @@ async function runAutomation(req: Request): Promise<AutomationResult> {
     notFound,
     errors,
       updatedCells: dryRun ? 0 : updateRequests.length,
-      logRows: logEntries.length,
-      preview: logEntries.map(buildPreviewRow),
-      pendingCount: pendingSelections.length,
-      pendingSelections,
+    logRows: logEntries.length,
+    preview: logEntries.map(buildPreviewRow),
+    pendingCount: pendingSelections.length,
+    pendingSelections,
+    dashboard: {
+      created: 0,
+      updated,
+      refreshed,
+      pending: pendingSelections.length,
+      notFound,
+      errors,
+      matched,
+      processed: sheetRows.length,
+      financial: {
+        openAmount: 0,
+        paidAmount: 0,
+        upcomingAmount: 0,
+      },
+      stageBreakdown: [],
+      recordStatusBreakdown: [],
+      actionBreakdown: [],
+    },
   }
 }
 

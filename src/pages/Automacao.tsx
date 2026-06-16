@@ -1,21 +1,29 @@
 import { useMemo, useState } from 'react';
 import { useMutation } from '@tanstack/react-query';
 import {
+  Activity,
   AlertTriangle,
   Bot,
+  CircleDollarSign,
   CheckCircle2,
   ExternalLink,
   FileSpreadsheet,
   FileText,
+  History,
+  LayoutDashboard,
   Play,
   RefreshCw,
+  ShieldCheck,
   Trello,
   Upload,
+  Wallet,
 } from 'lucide-react';
+import { Bar, BarChart, CartesianGrid, Cell, Pie, PieChart, XAxis, YAxis } from 'recharts';
 import { supabase } from '@/integrations/supabase/client';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { ChartContainer, ChartTooltip, ChartTooltipContent } from '@/components/ui/chart';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Switch } from '@/components/ui/switch';
@@ -39,6 +47,8 @@ type AutomationPreviewRow = {
 type AutomationResult = {
   dryRun: boolean;
   sheetName: string;
+  pdfFileName: string;
+  timestamp: string;
   processed: number;
   skipped: number;
   matched: number;
@@ -52,6 +62,31 @@ type AutomationResult = {
   preview: AutomationPreviewRow[];
   pendingCount: number;
   pendingSelections: PendingProcessSelection[];
+  dashboard?: AutomationDashboard;
+};
+
+type AutomationMetric = {
+  label: string;
+  value: number;
+};
+
+type AutomationDashboard = {
+  created: number;
+  updated: number;
+  refreshed: number;
+  pending: number;
+  notFound: number;
+  errors: number;
+  matched: number;
+  processed: number;
+  financial: {
+    openAmount: number;
+    paidAmount: number;
+    upcomingAmount: number;
+  };
+  stageBreakdown: AutomationMetric[];
+  recordStatusBreakdown: AutomationMetric[];
+  actionBreakdown: AutomationMetric[];
 };
 
 type ProcessOption = {
@@ -204,6 +239,73 @@ function formatActionLabel(action: string) {
   }
 }
 
+function formatCurrency(value: number) {
+  return value.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+}
+
+function formatCompactCurrency(value: number) {
+  if (Math.abs(value) >= 1000000) {
+    return `R$ ${(value / 1000000).toLocaleString('pt-BR', { maximumFractionDigits: 1 })} mi`;
+  }
+
+  if (Math.abs(value) >= 1000) {
+    return `R$ ${(value / 1000).toLocaleString('pt-BR', { maximumFractionDigits: 0 })} mil`;
+  }
+
+  return formatCurrency(value);
+}
+
+function incrementMetric(map: Map<string, number>, label: string) {
+  if (!label) return;
+  map.set(label, (map.get(label) || 0) + 1);
+}
+
+function buildFallbackDashboard(result: AutomationResult | null): AutomationDashboard | null {
+  if (!result) return null;
+
+  const actionCounts = new Map<string, number>();
+  const recordStatusCounts = new Map<string, number>();
+
+  result.preview.forEach((row) => {
+    incrementMetric(actionCounts, formatActionLabel(row.action));
+
+    if (row.status?.includes('INATIV')) {
+      incrementMetric(recordStatusCounts, 'INATIVO');
+    } else if (
+      row.status &&
+      ![
+        'cliente_adicionado_na_planilha',
+        'erro_parcial',
+        'erro_no_processamento',
+        'pre_visualizacao',
+      ].includes(row.status)
+    ) {
+      incrementMetric(recordStatusCounts, 'ATIVO');
+    }
+  });
+
+  return {
+    created: result.preview.filter((row) => row.action === 'cliente_adicionado').length,
+    updated: result.updated,
+    refreshed: result.refreshed,
+    pending: result.pendingCount,
+    notFound: result.notFound,
+    errors: result.errors,
+    matched: result.matched,
+    processed: result.processed,
+    financial: {
+      openAmount: 0,
+      paidAmount: 0,
+      upcomingAmount: 0,
+    },
+    stageBreakdown: [],
+    recordStatusBreakdown: [...recordStatusCounts.entries()].map(([label, value]) => ({ label, value })),
+    actionBreakdown: [...actionCounts.entries()].map(([label, value]) => ({ label, value })),
+  };
+}
+
+const chartPalette = ['#38bdf8', '#2563eb', '#14b8a6', '#f59e0b', '#ef4444', '#8b5cf6', '#0ea5e9', '#22c55e', '#f97316'];
+
 export default function Automacao() {
   const { toast } = useToast();
   const [dryRun, setDryRun] = useState(true);
@@ -299,6 +401,11 @@ export default function Automacao() {
     [pendingSelections, selectedProcessMatches],
   );
 
+  const automationDashboard = useMemo(
+    () => lastResult?.dashboard || buildFallbackDashboard(lastResult),
+    [lastResult],
+  );
+
   const summaryCards = [
     {
       title: 'Linhas lidas',
@@ -323,6 +430,54 @@ export default function Automacao() {
       value: lastResult ? lastResult.updated + lastResult.refreshed : '-',
       subtitle: lastResult ? `${lastResult.logRows} log(s) gravado(s)` : 'Sem execução ainda',
       icon: CheckCircle2,
+    },
+  ];
+
+  const executionCards = [
+    {
+      title: 'Atualizados',
+      value: automationDashboard?.updated ?? 0,
+      subtitle: `${automationDashboard?.refreshed ?? 0} linha(s) sÃ³ com data`,
+      icon: CheckCircle2,
+    },
+    {
+      title: 'Novos clientes',
+      value: automationDashboard?.created ?? 0,
+      subtitle: 'Linhas criadas nesta execuÃ§Ã£o',
+      icon: FileSpreadsheet,
+    },
+    {
+      title: 'Pendentes',
+      value: automationDashboard?.pending ?? 0,
+      subtitle: 'Esperando escolha de processo',
+      icon: AlertTriangle,
+    },
+    {
+      title: 'Erros / sem match',
+      value: (automationDashboard?.errors ?? 0) + (automationDashboard?.notFound ?? 0),
+      subtitle: `${automationDashboard?.errors ?? 0} erro(s) | ${automationDashboard?.notFound ?? 0} sem match`,
+      icon: ShieldCheck,
+    },
+  ];
+
+  const financialCards = [
+    {
+      title: 'Valor em aberto',
+      value: automationDashboard ? formatCompactCurrency(automationDashboard.financial.openAmount) : '-',
+      subtitle: automationDashboard ? formatCurrency(automationDashboard.financial.openAmount) : 'Sem execuÃ§Ã£o ainda',
+      icon: CircleDollarSign,
+    },
+    {
+      title: 'Valor pago',
+      value: automationDashboard ? formatCompactCurrency(automationDashboard.financial.paidAmount) : '-',
+      subtitle: automationDashboard ? formatCurrency(automationDashboard.financial.paidAmount) : 'Sem execuÃ§Ã£o ainda',
+      icon: Wallet,
+    },
+    {
+      title: 'Valor a vencer',
+      value: automationDashboard ? formatCompactCurrency(automationDashboard.financial.upcomingAmount) : '-',
+      subtitle: automationDashboard ? formatCurrency(automationDashboard.financial.upcomingAmount) : 'Sem execuÃ§Ã£o ainda',
+      icon: Activity,
     },
   ];
 
@@ -458,11 +613,190 @@ export default function Automacao() {
 
       <Card className="border-border/70 shadow-[0_14px_36px_rgba(15,23,42,0.06)]">
         <CardHeader className="border-b border-border/60 pb-4">
+          <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
+            <div>
+              <CardTitle className="flex items-center gap-2 text-lg">
+                <LayoutDashboard className="h-5 w-5 text-accent" />
+                Dashboard da automaÃ§Ã£o
+              </CardTitle>
+              <p className="mt-1 text-sm text-muted-foreground">
+                Resumo da Ãºltima rodada com volume operacional, financeiro, rÃ©gua de cobranÃ§a e distribuiÃ§Ã£o de status.
+              </p>
+            </div>
+            {lastResult ? (
+              <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+                <Badge variant={lastResult.dryRun ? 'secondary' : 'default'} className="rounded-xl px-3 py-1">
+                  {lastResult.dryRun ? 'Modo teste' : 'ExecuÃ§Ã£o real'}
+                </Badge>
+                <Badge variant="outline" className="rounded-xl px-3 py-1">
+                  {lastResult.timestamp || 'Sem horÃ¡rio'}
+                </Badge>
+                <Badge variant="secondary" className="rounded-xl px-3 py-1">
+                  {lastResult.pdfFileName || 'Arquivo nÃ£o informado'}
+                </Badge>
+              </div>
+            ) : null}
+          </div>
+        </CardHeader>
+        <CardContent className="space-y-6 p-5">
+          <div className="grid gap-4 xl:grid-cols-4">
+            {executionCards.map((card) => (
+              <div key={card.title} className="rounded-2xl border border-border/70 bg-background/70 p-4">
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <p className="text-sm text-muted-foreground">{card.title}</p>
+                    <p className="mt-3 text-3xl font-semibold tracking-tight">{card.value}</p>
+                    <p className="mt-2 text-xs leading-5 text-muted-foreground">{card.subtitle}</p>
+                  </div>
+                  <div className="rounded-2xl bg-primary/10 p-3 text-primary">
+                    <card.icon className="h-5 w-5" />
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+
+          <div className="grid gap-4 xl:grid-cols-3">
+            {financialCards.map((card) => (
+              <div key={card.title} className="rounded-2xl border border-border/70 bg-background/70 p-4">
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <p className="text-sm text-muted-foreground">{card.title}</p>
+                    <p className="mt-3 text-2xl font-semibold tracking-tight">{card.value}</p>
+                    <p className="mt-2 text-xs leading-5 text-muted-foreground">{card.subtitle}</p>
+                  </div>
+                  <div className="rounded-2xl bg-accent/10 p-3 text-accent">
+                    <card.icon className="h-5 w-5" />
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+
+          <div className="grid gap-4 xl:grid-cols-[1.2fr_0.8fr]">
+            <div className="rounded-[1.4rem] border border-border/70 bg-background/70 p-4">
+              <div className="mb-4 flex items-center gap-2">
+                <Trello className="h-4 w-4 text-accent" />
+                <div>
+                  <p className="text-sm font-medium">RÃ©gua de cobranÃ§a</p>
+                  <p className="text-xs text-muted-foreground">Clientes tratados por etapa na rodada atual.</p>
+                </div>
+              </div>
+              {automationDashboard && automationDashboard.stageBreakdown.length > 0 ? (
+                <ChartContainer
+                  className="h-[300px] w-full"
+                  config={Object.fromEntries(
+                    automationDashboard.stageBreakdown.map((item, index) => [
+                      item.label,
+                      { label: item.label, color: chartPalette[index % chartPalette.length] },
+                    ]),
+                  )}
+                >
+                  <BarChart data={automationDashboard.stageBreakdown} layout="vertical" margin={{ top: 8, right: 18, left: 16, bottom: 8 }}>
+                    <CartesianGrid horizontal={false} strokeDasharray="3 3" />
+                    <XAxis type="number" allowDecimals={false} />
+                    <YAxis type="category" dataKey="label" width={150} tickLine={false} axisLine={false} />
+                    <ChartTooltip content={<ChartTooltipContent />} />
+                    <Bar dataKey="value" radius={[0, 10, 10, 0]}>
+                      {automationDashboard.stageBreakdown.map((entry, index) => (
+                        <Cell key={entry.label} fill={chartPalette[index % chartPalette.length]} />
+                      ))}
+                    </Bar>
+                  </BarChart>
+                </ChartContainer>
+              ) : (
+                <div className="flex h-[300px] items-center justify-center rounded-2xl border border-dashed border-border/70 text-sm text-muted-foreground">
+                  Execute a automaÃ§Ã£o para ver a rÃ©gua da rodada.
+                </div>
+              )}
+            </div>
+
+            <div className="space-y-4">
+              <div className="rounded-[1.4rem] border border-border/70 bg-background/70 p-4">
+                <div className="mb-4 flex items-center gap-2">
+                  <ShieldCheck className="h-4 w-4 text-accent" />
+                  <div>
+                    <p className="text-sm font-medium">ATIVO x INATIVO</p>
+                    <p className="text-xs text-muted-foreground">DistribuiÃ§Ã£o de status dos clientes tratados.</p>
+                  </div>
+                </div>
+                {automationDashboard && automationDashboard.recordStatusBreakdown.length > 0 ? (
+                  <ChartContainer
+                    className="h-[220px] w-full"
+                    config={Object.fromEntries(
+                      automationDashboard.recordStatusBreakdown.map((item, index) => [
+                        item.label,
+                        { label: item.label, color: chartPalette[index % chartPalette.length] },
+                      ]),
+                    )}
+                  >
+                    <PieChart>
+                      <Pie data={automationDashboard.recordStatusBreakdown} dataKey="value" nameKey="label" innerRadius={50} outerRadius={80} paddingAngle={3}>
+                        {automationDashboard.recordStatusBreakdown.map((entry, index) => (
+                          <Cell key={entry.label} fill={chartPalette[index % chartPalette.length]} />
+                        ))}
+                      </Pie>
+                      <ChartTooltip content={<ChartTooltipContent nameKey="label" />} />
+                    </PieChart>
+                  </ChartContainer>
+                ) : (
+                  <div className="flex h-[220px] items-center justify-center rounded-2xl border border-dashed border-border/70 text-sm text-muted-foreground">
+                    Sem dados de status atÃ© a primeira execuÃ§Ã£o.
+                  </div>
+                )}
+              </div>
+
+              <div className="rounded-[1.4rem] border border-border/70 bg-background/70 p-4">
+                <div className="mb-3 flex items-center gap-2">
+                  <History className="h-4 w-4 text-accent" />
+                  <div>
+                    <p className="text-sm font-medium">AÃ§Ãµes executadas</p>
+                    <p className="text-xs text-muted-foreground">Resumo do que a automaÃ§Ã£o alterou ou criou.</p>
+                  </div>
+                </div>
+                <div className="space-y-3">
+                  {(automationDashboard?.actionBreakdown || []).length > 0 ? (
+                    automationDashboard?.actionBreakdown.map((item, index) => {
+                      const maxValue = Math.max(...(automationDashboard.actionBreakdown.map((metric) => metric.value) || [1]));
+                      const width = maxValue > 0 ? Math.max((item.value / maxValue) * 100, 6) : 0;
+
+                      return (
+                        <div key={item.label} className="space-y-1.5">
+                          <div className="flex items-center justify-between gap-3 text-sm">
+                            <span>{item.label}</span>
+                            <span className="font-medium">{item.value}</span>
+                          </div>
+                          <div className="h-2 rounded-full bg-muted">
+                            <div
+                              className="h-2 rounded-full"
+                              style={{
+                                width: `${width}%`,
+                                backgroundColor: chartPalette[index % chartPalette.length],
+                              }}
+                            />
+                          </div>
+                        </div>
+                      );
+                    })
+                  ) : (
+                    <div className="rounded-2xl border border-dashed border-border/70 px-4 py-8 text-center text-sm text-muted-foreground">
+                      Sem aÃ§Ãµes registradas atÃ© a primeira execuÃ§Ã£o.
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+          </div>
+        </CardContent>
+      </Card>
+
+      <Card className="border-border/70 shadow-[0_14px_36px_rgba(15,23,42,0.06)]">
+        <CardHeader className="border-b border-border/60 pb-4">
           <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
             <div>
-              <CardTitle className="text-lg">Prévia da última execução</CardTitle>
+              <CardTitle className="text-lg">Histórico detalhado da execução</CardTitle>
               <p className="mt-1 text-sm text-muted-foreground">
-                Mostra todas as linhas registradas nesta execução para conferência rápida.
+                Mostra tudo o que foi registrado nesta rodada para conferência rápida no site.
               </p>
             </div>
             {lastResult ? (
