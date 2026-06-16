@@ -842,8 +842,28 @@ function buildPendingProcessSelection(
   }
 }
 
+function chooseBestCandidateByScore(
+  candidates: SheetAmountEntry[],
+  pdfRecord: PreparedPdfRecord,
+  currentCode: string,
+) {
+  const scored = candidates
+    .map((candidate) => ({
+      candidate,
+      score: scoreProcessOption(buildProcessOption(candidate), pdfRecord, currentCode),
+    }))
+    .sort((left, right) => right.score - left.score || left.candidate.rowNumber - right.candidate.rowNumber)
+
+  if (scored.length === 0) return null
+  if (scored.length === 1) return scored[0].candidate
+  if (scored[0].score > scored[1].score) return scored[0].candidate
+
+  return scored[0].candidate
+}
+
 function resolveSelectedSourceCandidate(
   candidates: SheetAmountEntry[],
+  pdfRecord: PreparedPdfRecord,
   selectedSelectionId: string | undefined,
   currentCode: string,
 ) {
@@ -859,6 +879,13 @@ function resolveSelectedSourceCandidate(
       (candidate) => candidate.code && normalizeHeader(candidate.code) === normalizeHeader(currentCode),
     )
     if (codeMatches.length === 1) return codeMatches[0]
+  }
+
+  const allCandidatesClosed = candidates.length > 0 && selectableCandidates.length === candidates.length && selectableCandidates.every(
+    (candidate) => isClosedOrPaidProcess(candidate.status, candidate.financialStatus),
+  )
+  if (allCandidatesClosed) {
+    return chooseBestCandidateByScore(selectableCandidates, pdfRecord, currentCode)
   }
 
   return null
@@ -1633,7 +1660,8 @@ function buildUpdatePlan(
 
   for (const column of columns) {
     if (!column.role) continue
-    const nextValue = computeColumnValue(
+    const currentValue = getCell(row.values, column.index)
+    let nextValue = computeColumnValue(
       column,
       timestamp,
       executionDate,
@@ -1651,6 +1679,14 @@ function buildUpdatePlan(
       upcomingAmount,
       trello,
     )
+
+    if (
+      (column.role === 'stageName' || column.role === 'trelloActionDate' || column.role === 'stageDays') &&
+      !String(nextValue || '').trim()
+    ) {
+      nextValue = currentValue
+    }
+
     newValues.set(column.index, nextValue)
 
     if (column.role === 'updatedAt') {
@@ -1658,7 +1694,6 @@ function buildUpdatePlan(
       continue
     }
 
-    const currentValue = getCell(row.values, column.index)
     if (compareValue(currentValue) !== compareValue(nextValue)) {
       changedColumns.add(column.index)
     }
@@ -1691,6 +1726,15 @@ function buildUpdatePlan(
     changedColumnLabels,
     requests,
   }
+}
+
+function resolveStageForMetrics(row: SheetClientRow, columns: TargetColumn[], trello: TrelloLookupResult) {
+  if (trello.situation) return trello.situation
+
+  const stageColumn = columns.find((column) => column.role === 'stageName')
+  if (!stageColumn) return ''
+
+  return getCell(row.values, stageColumn.index)
 }
 
 function buildLogRow(entry: AutomationLogEntry): string[] {
@@ -2012,6 +2056,7 @@ async function runAutomation(req: Request): Promise<AutomationResult> {
         const sourceCandidates = resolveSourceCandidatesForClient(valueAmountLookup, workingRow.normalizedName)
         const sourceEntry = resolveSelectedSourceCandidate(
           sourceCandidates,
+          pdfRecord,
           selectedProcessMatches.get(pdfRecord.recordKey),
           getCell(workingRow.values, 5),
         )
@@ -2083,7 +2128,7 @@ async function runAutomation(req: Request): Promise<AutomationResult> {
         if (isCreated || updatePlan.action === 'atualizado' || updatePlan.action === 'data_atualizada') {
           registerDashboardMetrics({
             action: isCreated ? 'cliente_adicionado' : updatePlan.action,
-            trelloStage: trello.situation,
+            trelloStage: resolveStageForMetrics(workingRow, targetColumns, trello),
             recordStatus: deriveRecordStatus(trello),
             openAmount: amounts.openAmount,
             paidAmount: amounts.paidAmount,
@@ -2286,6 +2331,7 @@ async function runAutomation(req: Request): Promise<AutomationResult> {
     const sourceCandidates = resolveSourceCandidatesForClient(valueAmountLookup, row.normalizedName)
     const sourceEntry = resolveSelectedSourceCandidate(
       sourceCandidates,
+      pdfRecord,
       selectedProcessMatches.get(pdfRecord.recordKey),
       getCell(row.values, 5),
     )
@@ -2417,6 +2463,7 @@ async function runAutomation(req: Request): Promise<AutomationResult> {
     const sourceCandidates = resolveSourceCandidatesForClient(valueAmountLookup, row.normalizedName)
     const sourceEntry = resolveSelectedSourceCandidate(
       sourceCandidates,
+      pdfRecord,
       selectedProcessMatches.get(pdfRecord.recordKey),
       getCell(row.values, 5),
     )
