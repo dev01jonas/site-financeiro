@@ -60,7 +60,32 @@ type AutomationBody = {
   pdfRecords?: PdfRecord[]
   clearLog?: boolean
   allowFallbackSelections?: boolean
-  selectedProcessMatches?: Record<string, string> | Array<{ recordKey: string; selectionId: string }>
+  selectedProcessMatches?: Record<string, SelectedProcessMatchInput> | Array<SelectedProcessMatchObjectInput & { recordKey: string }>
+}
+
+type SelectedProcessMatchObjectInput = {
+  selectionId?: unknown
+  totalAmount?: unknown
+  amount?: unknown
+  dueDate?: unknown
+  description?: unknown
+  openAmount?: unknown
+  paidAmount?: unknown
+  upcomingAmount?: unknown
+}
+
+type SelectedProcessMatchInput = SelectedProcessMatchObjectInput | string
+
+type SelectedProcessMatch = {
+  selectionId: string
+  totalAmount: number | null
+  amount: number | null
+  dueDate: string
+  description: string
+  openAmount: number | null
+  paidAmount: number | null
+  upcomingAmount: number | null
+  hasManualAmounts: boolean
 }
 
 type PdfRecord = {
@@ -760,22 +785,64 @@ function buildPdfRecordIndex(pdfRecords: PdfRecord[]) {
 function normalizeSelectedProcessMatches(
   value: AutomationBody['selectedProcessMatches'],
 ) {
-  const result = new Map<string, string>()
+  const result = new Map<string, SelectedProcessMatch>()
+
+  const parseOptionalAmount = (input: unknown) => {
+    if (typeof input === 'number') return Number.isFinite(input) ? input : null
+    if (!String(input ?? '').trim()) return null
+    return parseAmount(input)
+  }
+
+  const normalizeMatch = (input: SelectedProcessMatchInput): SelectedProcessMatch | null => {
+    if (typeof input === 'string') {
+      return {
+        selectionId: input,
+        totalAmount: null,
+        amount: null,
+        dueDate: '',
+        description: '',
+        openAmount: null,
+        paidAmount: null,
+        upcomingAmount: null,
+        hasManualAmounts: false,
+      }
+    }
+
+    if (!input || typeof input !== 'object') return null
+
+    const selectionId = typeof input.selectionId === 'string' ? input.selectionId : ''
+    if (!selectionId) return null
+    const openAmount = parseOptionalAmount(input.openAmount)
+    const paidAmount = parseOptionalAmount(input.paidAmount)
+    const upcomingAmount = parseOptionalAmount(input.upcomingAmount)
+
+    return {
+      selectionId,
+      totalAmount: parseOptionalAmount(input.totalAmount),
+      amount: parseOptionalAmount(input.amount),
+      dueDate: normalizeDate(input.dueDate),
+      description: typeof input.description === 'string' ? input.description.trim() : '',
+      openAmount,
+      paidAmount,
+      upcomingAmount,
+      hasManualAmounts: openAmount !== null || paidAmount !== null || upcomingAmount !== null,
+    }
+  }
 
   if (Array.isArray(value)) {
     for (const item of value) {
-      if (item && typeof item.recordKey === 'string' && typeof item.selectionId === 'string') {
-        result.set(item.recordKey, item.selectionId)
+      if (item && typeof item === 'object' && typeof item.recordKey === 'string') {
+        const match = normalizeMatch(item)
+        if (match) result.set(item.recordKey, match)
       }
     }
     return result
   }
 
   if (value && typeof value === 'object') {
-    for (const [recordKey, selectionId] of Object.entries(value)) {
-      if (typeof selectionId === 'string') {
-        result.set(recordKey, selectionId)
-      }
+    for (const [recordKey, input] of Object.entries(value)) {
+      const match = normalizeMatch(input)
+      if (match) result.set(recordKey, match)
     }
   }
 
@@ -1649,6 +1716,31 @@ function deriveFinancialStatus(
   return amount ? 'EM DIA' : ''
 }
 
+function deriveManualFinancialStatus(
+  currentStatus: string,
+  selectedMatch: SelectedProcessMatch | undefined,
+  openAmount: number | null,
+  paidAmount: number | null,
+  upcomingAmount: number | null,
+) {
+  if (!selectedMatch?.hasManualAmounts) return currentStatus
+  if ((openAmount || 0) > 0) return 'EM ATRASO'
+  if ((upcomingAmount || 0) > 0) return 'A VENCER'
+  if ((paidAmount || 0) > 0) return 'QUITADO'
+  return currentStatus
+}
+
+function applyManualAmountOverrides(
+  amounts: { openAmount: number | null; paidAmount: number | null; upcomingAmount: number | null },
+  selectedMatch: SelectedProcessMatch | undefined,
+) {
+  return {
+    openAmount: selectedMatch?.openAmount ?? amounts.openAmount,
+    paidAmount: selectedMatch?.paidAmount ?? amounts.paidAmount,
+    upcomingAmount: selectedMatch?.upcomingAmount ?? amounts.upcomingAmount,
+  }
+}
+
 function deriveAmounts(
   totalAmount: number | null,
   status: string,
@@ -2130,8 +2222,9 @@ async function runAutomation(req: Request): Promise<AutomationResult> {
 
     for (const pdfRecord of pdfIndex.records) {
       try {
+        const selectedMatch = selectedProcessMatches.get(pdfRecord.recordKey)
         const selectedSource = valueAmountLookup.entries.find(
-          (entry) => entry.selectionId === selectedProcessMatches.get(pdfRecord.recordKey),
+          (entry) => entry.selectionId === selectedMatch?.selectionId,
         )
         const matchedRow = resolveSheetRowForPdfRecord(
           pdfRecord,
@@ -2183,7 +2276,7 @@ async function runAutomation(req: Request): Promise<AutomationResult> {
           valueAmountLookup,
           workingRow.normalizedName,
           pdfRecord,
-          selectedProcessMatches.get(pdfRecord.recordKey),
+          selectedMatch?.selectionId,
           getCell(workingRow.values, 5),
           allowFallbackSelections,
         )
@@ -2228,11 +2321,16 @@ async function runAutomation(req: Request): Promise<AutomationResult> {
         const sourceDate = sourceEntry?.date || getCell(workingRow.values, 1)
         const sourceDueDay = sourceEntry?.dueDay || ''
         const sourceFinancialStatus = sourceEntry?.financialStatus || getCell(workingRow.values, 15)
-        const totalAmount = sourceEntry?.amount ?? parseAmount(getCell(workingRow.values, SHEET_TOTAL_VALUE_COLUMN_INDEX))
-        const amount = integra.amount ?? pdfRecord.amount ?? null
-        const description = integra.description || String(pdfRecord.description || '').trim()
-        const dueDate = deriveDueDateFromContract(sourceDate, sourceDueDay, description, integra.dueDate || pdfRecord.dueDate || '')
-        const status = deriveFinancialStatus(
+        const totalAmount =
+          selectedMatch?.totalAmount ??
+          sourceEntry?.amount ??
+          parseAmount(getCell(workingRow.values, SHEET_TOTAL_VALUE_COLUMN_INDEX))
+        const amount = selectedMatch?.amount ?? integra.amount ?? pdfRecord.amount ?? null
+        const description = selectedMatch?.description || integra.description || String(pdfRecord.description || '').trim()
+        const dueDate =
+          selectedMatch?.dueDate ||
+          deriveDueDateFromContract(sourceDate, sourceDueDay, description, integra.dueDate || pdfRecord.dueDate || '')
+        const baseStatus = deriveFinancialStatus(
           integra.status,
           sourceFinancialStatus,
           amount,
@@ -2240,7 +2338,17 @@ async function runAutomation(req: Request): Promise<AutomationResult> {
           integra.paidAmount,
           integra.upcomingAmount,
         )
-        const amounts = deriveAmounts(totalAmount, status, amount, description, integra)
+        const amounts = applyManualAmountOverrides(
+          deriveAmounts(totalAmount, baseStatus, amount, description, integra),
+          selectedMatch,
+        )
+        const status = deriveManualFinancialStatus(
+          baseStatus,
+          selectedMatch,
+          amounts.openAmount,
+          amounts.paidAmount,
+          amounts.upcomingAmount,
+        )
         const updatePlan = buildUpdatePlan(
           workingRow,
           targetColumns,
@@ -2476,13 +2584,14 @@ async function runAutomation(req: Request): Promise<AutomationResult> {
     if (trello.found) setIfMissing(sources, 'Trello')
 
     const errorParts = [integra.error, trello.error].filter(Boolean) as string[]
-    const amount = integra.amount ?? pdfRecord.amount ?? null
-    const description = integra.description || String(pdfRecord.description || '').trim()
+    const selectedMatch = selectedProcessMatches.get(pdfRecord.recordKey)
+    const amount = selectedMatch?.amount ?? integra.amount ?? pdfRecord.amount ?? null
+    const description = selectedMatch?.description || integra.description || String(pdfRecord.description || '').trim()
     const preparedSourceSelection = prepareSourceSelection(
       valueAmountLookup,
       row.normalizedName,
       pdfRecord,
-      selectedProcessMatches.get(pdfRecord.recordKey),
+      selectedMatch?.selectionId,
       getCell(row.values, 5),
       allowFallbackSelections,
     )
@@ -2522,9 +2631,12 @@ async function runAutomation(req: Request): Promise<AutomationResult> {
     const sourceDate = sourceEntry?.date || getCell(row.values, 1)
     const sourceDueDay = sourceEntry?.dueDay || ''
     const sourceFinancialStatus = sourceEntry?.financialStatus || getCell(row.values, 15)
-    const totalAmount = sourceEntry?.amount ?? parseAmount(getCell(row.values, SHEET_TOTAL_VALUE_COLUMN_INDEX))
-    const dueDate = deriveDueDateFromContract(sourceDate, sourceDueDay, description, integra.dueDate || pdfRecord.dueDate || '')
-    const status = deriveFinancialStatus(
+    const totalAmount =
+      selectedMatch?.totalAmount ?? sourceEntry?.amount ?? parseAmount(getCell(row.values, SHEET_TOTAL_VALUE_COLUMN_INDEX))
+    const dueDate =
+      selectedMatch?.dueDate ||
+      deriveDueDateFromContract(sourceDate, sourceDueDay, description, integra.dueDate || pdfRecord.dueDate || '')
+    const baseStatus = deriveFinancialStatus(
       integra.status,
       sourceFinancialStatus,
       amount,
@@ -2532,7 +2644,14 @@ async function runAutomation(req: Request): Promise<AutomationResult> {
       integra.paidAmount,
       integra.upcomingAmount,
     )
-    const amounts = deriveAmounts(totalAmount, status, amount, description, integra)
+    const amounts = applyManualAmountOverrides(deriveAmounts(totalAmount, baseStatus, amount, description, integra), selectedMatch)
+    const status = deriveManualFinancialStatus(
+      baseStatus,
+      selectedMatch,
+      amounts.openAmount,
+      amounts.paidAmount,
+      amounts.upcomingAmount,
+    )
     const updatePlan = buildUpdatePlan(
       row,
       targetColumns,
@@ -2639,13 +2758,14 @@ async function runAutomation(req: Request): Promise<AutomationResult> {
     if (trello.found) setIfMissing(sources, 'Trello')
 
     const errorParts = [integra.error, trello.error].filter(Boolean) as string[]
-    const amount = integra.amount ?? pdfRecord.amount ?? null
-    const description = integra.description || String(pdfRecord.description || '').trim()
+    const selectedMatch = selectedProcessMatches.get(pdfRecord.recordKey)
+    const amount = selectedMatch?.amount ?? integra.amount ?? pdfRecord.amount ?? null
+    const description = selectedMatch?.description || integra.description || String(pdfRecord.description || '').trim()
     const preparedSourceSelection = prepareSourceSelection(
       valueAmountLookup,
       row.normalizedName,
       pdfRecord,
-      selectedProcessMatches.get(pdfRecord.recordKey),
+      selectedMatch?.selectionId,
       getCell(row.values, 5),
       allowFallbackSelections,
     )
@@ -2685,9 +2805,12 @@ async function runAutomation(req: Request): Promise<AutomationResult> {
     const sourceDate = sourceEntry?.date || getCell(row.values, 1)
     const sourceDueDay = sourceEntry?.dueDay || ''
     const sourceFinancialStatus = sourceEntry?.financialStatus || getCell(row.values, 15)
-    const totalAmount = sourceEntry?.amount ?? parseAmount(getCell(row.values, SHEET_TOTAL_VALUE_COLUMN_INDEX))
-    const dueDate = deriveDueDateFromContract(sourceDate, sourceDueDay, description, integra.dueDate || pdfRecord.dueDate || '')
-    const status = deriveFinancialStatus(
+    const totalAmount =
+      selectedMatch?.totalAmount ?? sourceEntry?.amount ?? parseAmount(getCell(row.values, SHEET_TOTAL_VALUE_COLUMN_INDEX))
+    const dueDate =
+      selectedMatch?.dueDate ||
+      deriveDueDateFromContract(sourceDate, sourceDueDay, description, integra.dueDate || pdfRecord.dueDate || '')
+    const baseStatus = deriveFinancialStatus(
       integra.status,
       sourceFinancialStatus,
       amount,
@@ -2695,7 +2818,14 @@ async function runAutomation(req: Request): Promise<AutomationResult> {
       integra.paidAmount,
       integra.upcomingAmount,
     )
-    const amounts = deriveAmounts(totalAmount, status, amount, description, integra)
+    const amounts = applyManualAmountOverrides(deriveAmounts(totalAmount, baseStatus, amount, description, integra), selectedMatch)
+    const status = deriveManualFinancialStatus(
+      baseStatus,
+      selectedMatch,
+      amounts.openAmount,
+      amounts.paidAmount,
+      amounts.upcomingAmount,
+    )
     const updatePlan = buildUpdatePlan(
       row,
       targetColumns,

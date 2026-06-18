@@ -114,6 +114,20 @@ type PendingProcessSelection = {
   options: ProcessOption[];
 };
 
+type ManualProcessAdjustment = {
+  totalAmount?: string;
+  amount?: string;
+  dueDate?: string;
+  description?: string;
+  openAmount?: string;
+  paidAmount?: string;
+  upcomingAmount?: string;
+};
+
+type SelectedProcessMatchPayload = ManualProcessAdjustment & {
+  selectionId: string;
+};
+
 type AutomationRequestPayload = {
   dryRun: boolean;
   sheetName?: string;
@@ -121,11 +135,11 @@ type AutomationRequestPayload = {
   pdfRecords: ExtractedRecord[];
   clearLog?: boolean;
   allowFallbackSelections?: boolean;
-  selectedProcessMatches?: Record<string, string>;
+  selectedProcessMatches?: Record<string, string | SelectedProcessMatchPayload>;
 };
 
 type AutomationMutationPayload = {
-  selectedMatches?: Record<string, string>;
+  selectedMatches?: Record<string, string | SelectedProcessMatchPayload>;
   allowFallbackSelections?: boolean;
 };
 
@@ -450,6 +464,7 @@ export default function Automacao() {
   const [pendingSelections, setPendingSelections] = useState<PendingProcessSelection[]>([]);
   const [processSelectionDialogOpen, setProcessSelectionDialogOpen] = useState(false);
   const [selectedProcessMatches, setSelectedProcessMatches] = useState<Record<string, string>>({});
+  const [manualProcessAdjustments, setManualProcessAdjustments] = useState<Record<string, ManualProcessAdjustment>>({});
 
   const handlePdfSelection = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
@@ -476,6 +491,39 @@ export default function Automacao() {
       setPdfLoading(false);
       event.target.value = '';
     }
+  };
+
+  const updateManualProcessAdjustment = (
+    recordKey: string,
+    field: keyof ManualProcessAdjustment,
+    value: string,
+  ) => {
+    setManualProcessAdjustments((current) => ({
+      ...current,
+      [recordKey]: {
+        ...(current[recordKey] || {}),
+        [field]: value,
+      },
+    }));
+  };
+
+  const buildSelectedProcessPayload = () => {
+    const payload: Record<string, SelectedProcessMatchPayload> = {};
+
+    for (const [recordKey, selectionId] of Object.entries(selectedProcessMatches)) {
+      if (!selectionId) continue;
+      const adjustment = manualProcessAdjustments[recordKey] || {};
+      const cleanedAdjustment = Object.fromEntries(
+        Object.entries(adjustment).filter(([, value]) => String(value || '').trim()),
+      ) as ManualProcessAdjustment;
+
+      payload[recordKey] = {
+        selectionId,
+        ...cleanedAdjustment,
+      };
+    }
+
+    return payload;
   };
 
   const automationMutation = useMutation({
@@ -507,6 +555,7 @@ export default function Automacao() {
 
         setPendingSelections(data.pendingSelections);
         setSelectedProcessMatches(suggestedMatches);
+        setManualProcessAdjustments({});
         setProcessSelectionDialogOpen(true);
         toast({
         title: 'Escolha o processo correto',
@@ -516,6 +565,7 @@ export default function Automacao() {
       }
 
       setPendingSelections([]);
+      setManualProcessAdjustments({});
       setProcessSelectionDialogOpen(false);
       toast({
         title: data.dryRun ? 'Teste concluído' : 'Planilha atualizada',
@@ -713,6 +763,7 @@ export default function Automacao() {
               disabled={automationMutation.isPending || pdfLoading}
               onClick={() => {
                 setSelectedProcessMatches({});
+                setManualProcessAdjustments({});
                 automationMutation.mutate({});
               }}
             >
@@ -1071,6 +1122,105 @@ export default function Automacao() {
                       </label>
                     ))}
                   </RadioGroup>
+
+                  <div className="rounded-xl border border-dashed border-border/70 bg-background/40 p-3">
+                    <div className="mb-3">
+                      <p className="text-sm font-semibold">Ajuste manual desta cobrança</p>
+                      <p className="text-xs text-muted-foreground">
+                        Use só quando o Excel trouxer combo, valor somado ou vencimento diferente. Campos vazios mantêm o cálculo automático.
+                      </p>
+                    </div>
+                    <div className="grid gap-3 md:grid-cols-3">
+                      <div className="space-y-1.5">
+                        <Label htmlFor={`manual-total-${selection.recordKey}`}>Valor total (K)</Label>
+                        <Input
+                          id={`manual-total-${selection.recordKey}`}
+                          value={manualProcessAdjustments[selection.recordKey]?.totalAmount || ''}
+                          onChange={(event) =>
+                            updateManualProcessAdjustment(selection.recordKey, 'totalAmount', event.target.value)
+                          }
+                          placeholder="Ex.: R$ 9.000,00"
+                          className="h-10 rounded-xl border-border/70 bg-background/80"
+                        />
+                      </div>
+                      <div className="space-y-1.5">
+                        <Label htmlFor={`manual-amount-${selection.recordKey}`}>Parcela do Excel</Label>
+                        <Input
+                          id={`manual-amount-${selection.recordKey}`}
+                          value={manualProcessAdjustments[selection.recordKey]?.amount || ''}
+                          onChange={(event) =>
+                            updateManualProcessAdjustment(selection.recordKey, 'amount', event.target.value)
+                          }
+                          placeholder={
+                            selection.pdfAmount !== null
+                              ? selection.pdfAmount.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })
+                              : 'Ex.: R$ 500,00'
+                          }
+                          className="h-10 rounded-xl border-border/70 bg-background/80"
+                        />
+                      </div>
+                      <div className="space-y-1.5">
+                        <Label htmlFor={`manual-due-${selection.recordKey}`}>Vencimento</Label>
+                        <Input
+                          id={`manual-due-${selection.recordKey}`}
+                          value={manualProcessAdjustments[selection.recordKey]?.dueDate || ''}
+                          onChange={(event) =>
+                            updateManualProcessAdjustment(selection.recordKey, 'dueDate', event.target.value)
+                          }
+                          placeholder={selection.pdfDueDate || 'Ex.: 10/06/2026'}
+                          className="h-10 rounded-xl border-border/70 bg-background/80"
+                        />
+                      </div>
+                      <div className="space-y-1.5">
+                        <Label htmlFor={`manual-open-${selection.recordKey}`}>Valor em aberto (U)</Label>
+                        <Input
+                          id={`manual-open-${selection.recordKey}`}
+                          value={manualProcessAdjustments[selection.recordKey]?.openAmount || ''}
+                          onChange={(event) =>
+                            updateManualProcessAdjustment(selection.recordKey, 'openAmount', event.target.value)
+                          }
+                          placeholder="Ex.: R$ 7.000,00"
+                          className="h-10 rounded-xl border-border/70 bg-background/80"
+                        />
+                      </div>
+                      <div className="space-y-1.5">
+                        <Label htmlFor={`manual-paid-${selection.recordKey}`}>Valor pago (V)</Label>
+                        <Input
+                          id={`manual-paid-${selection.recordKey}`}
+                          value={manualProcessAdjustments[selection.recordKey]?.paidAmount || ''}
+                          onChange={(event) =>
+                            updateManualProcessAdjustment(selection.recordKey, 'paidAmount', event.target.value)
+                          }
+                          placeholder="Ex.: R$ 1.000,00"
+                          className="h-10 rounded-xl border-border/70 bg-background/80"
+                        />
+                      </div>
+                      <div className="space-y-1.5">
+                        <Label htmlFor={`manual-upcoming-${selection.recordKey}`}>Valor a vencer (W)</Label>
+                        <Input
+                          id={`manual-upcoming-${selection.recordKey}`}
+                          value={manualProcessAdjustments[selection.recordKey]?.upcomingAmount || ''}
+                          onChange={(event) =>
+                            updateManualProcessAdjustment(selection.recordKey, 'upcomingAmount', event.target.value)
+                          }
+                          placeholder="Ex.: R$ 4.000,00"
+                          className="h-10 rounded-xl border-border/70 bg-background/80"
+                        />
+                      </div>
+                      <div className="space-y-1.5 md:col-span-3">
+                        <Label htmlFor={`manual-description-${selection.recordKey}`}>Descrição</Label>
+                        <Input
+                          id={`manual-description-${selection.recordKey}`}
+                          value={manualProcessAdjustments[selection.recordKey]?.description || ''}
+                          onChange={(event) =>
+                            updateManualProcessAdjustment(selection.recordKey, 'description', event.target.value)
+                          }
+                          placeholder={selection.pdfDescription || 'Ex.: 16ª parcela'}
+                          className="h-10 rounded-xl border-border/70 bg-background/80"
+                        />
+                      </div>
+                    </div>
+                  </div>
                 </div>
               ))}
             </div>
@@ -1085,7 +1235,7 @@ export default function Automacao() {
               disabled={!allPendingSelectionsFilled || automationMutation.isPending}
               onClick={() =>
                 automationMutation.mutate({
-                  selectedMatches: selectedProcessMatches,
+                  selectedMatches: buildSelectedProcessPayload(),
                   allowFallbackSelections: true,
                 })
               }
