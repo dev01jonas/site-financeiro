@@ -216,6 +216,7 @@ type PendingProcessSelection = {
   pdfAmount: number | null
   pdfDescription: string
   suggestedSelectionId: string
+  reason?: string
   options: ProcessOption[]
 }
 
@@ -441,6 +442,13 @@ function parseBrDate(value: string) {
   return Number.isNaN(parsed.getTime()) ? null : parsed
 }
 
+function formatBrDate(date: Date) {
+  const day = String(date.getDate()).padStart(2, '0')
+  const month = String(date.getMonth() + 1).padStart(2, '0')
+  const year = String(date.getFullYear())
+  return `${day}/${month}/${year}`
+}
+
 function diffDaysFromToday(value: string) {
   const date = parseBrDate(value)
   if (!date) return null
@@ -654,6 +662,47 @@ function resolveSourceCandidatesForClient(
   )
 }
 
+function scoreFallbackSourceCandidate(entry: SheetAmountEntry, normalizedClientName: string) {
+  const sourceTokens = new Set(entry.normalizedName.split(' ').filter(Boolean))
+  const targetTokens = normalizedClientName.split(' ').filter(Boolean)
+  const sharedTokens = targetTokens.filter((token) => sourceTokens.has(token))
+  if (sharedTokens.length === 0) return 0
+
+  const lastTargetToken = targetTokens[targetTokens.length - 1] || ''
+  const lastSourceToken = entry.normalizedName.split(' ').filter(Boolean).slice(-1)[0] || ''
+
+  let score = sharedTokens.length * 12
+  if (lastTargetToken && lastSourceToken && lastTargetToken === lastSourceToken) {
+    score += 30
+  }
+
+  if (
+    sharedTokens.length === 1 &&
+    sharedTokens[0] &&
+    sharedTokens[0].length < 5 &&
+    lastTargetToken !== sharedTokens[0]
+  ) {
+    score -= 15
+  }
+
+  return score
+}
+
+function resolveFallbackSourceCandidates(
+  lookup: ReturnType<typeof buildSheetAmountLookup>,
+  normalizedClientName: string,
+) {
+  return lookup.entries
+    .map((entry) => ({
+      entry,
+      score: scoreFallbackSourceCandidate(entry, normalizedClientName),
+    }))
+    .filter((item) => item.score > 0)
+    .sort((left, right) => right.score - left.score || left.entry.rowNumber - right.entry.rowNumber)
+    .slice(0, 6)
+    .map((item) => item.entry)
+}
+
 async function loadValueSourceRows(
   accessToken: string,
   currentSpreadsheetId: string,
@@ -817,6 +866,8 @@ function buildPendingProcessSelection(
   pdfRecord: PreparedPdfRecord,
   candidates: SheetAmountEntry[],
   currentCode: string,
+  reason = '',
+  allowSuggestion = true,
 ): PendingProcessSelection {
   const options = getSelectableProcessCandidates(candidates).map(buildProcessOption)
   const scored = options.map((option) => ({
@@ -827,7 +878,7 @@ function buildPendingProcessSelection(
   scored.sort((left, right) => right.score - left.score || left.option.rowNumber - right.option.rowNumber)
 
   const suggestedSelectionId =
-    scored.length > 0 && (scored.length === 1 || scored[0].score > scored[1].score) && scored[0].score > 0
+    allowSuggestion && scored.length > 0 && (scored.length === 1 || scored[0].score > scored[1].score) && scored[0].score > 0
       ? scored[0].option.selectionId
       : ''
 
@@ -838,6 +889,7 @@ function buildPendingProcessSelection(
     pdfAmount: typeof pdfRecord.amount === 'number' ? pdfRecord.amount : null,
     pdfDescription: String(pdfRecord.description || '').trim(),
     suggestedSelectionId,
+    reason,
     options,
   }
 }
@@ -889,6 +941,51 @@ function resolveSelectedSourceCandidate(
   }
 
   return null
+}
+
+function prepareSourceSelection(
+  lookup: ReturnType<typeof buildSheetAmountLookup>,
+  normalizedClientName: string,
+  pdfRecord: PreparedPdfRecord,
+  selectedSelectionId: string | undefined,
+  currentCode: string,
+) {
+  const directCandidates = resolveSourceCandidatesForClient(lookup, normalizedClientName)
+  if (directCandidates.length > 0) {
+    return {
+      sourceEntry: resolveSelectedSourceCandidate(directCandidates, pdfRecord, selectedSelectionId, currentCode),
+      pendingSelection: null as PendingProcessSelection | null,
+    }
+  }
+
+  if (selectedSelectionId) {
+    const selectedFallback = lookup.entries.find((entry) => entry.selectionId === selectedSelectionId) || null
+    if (selectedFallback) {
+      return {
+        sourceEntry: selectedFallback,
+        pendingSelection: null as PendingProcessSelection | null,
+      }
+    }
+  }
+
+  const fallbackCandidates = resolveFallbackSourceCandidates(lookup, normalizedClientName)
+  if (fallbackCandidates.length > 0) {
+    return {
+      sourceEntry: null,
+      pendingSelection: buildPendingProcessSelection(
+        pdfRecord,
+        fallbackCandidates,
+        currentCode,
+        'Cliente não encontrado automaticamente na Prospecção (PRD). Selecione o processo correto antes de preencher.',
+        false,
+      ),
+    }
+  }
+
+  return {
+    sourceEntry: null,
+    pendingSelection: null as PendingProcessSelection | null,
+  }
 }
 
 function resolvePdfRecordForRow(
@@ -1470,6 +1567,37 @@ function extractInstallmentNumber(description: string) {
   return Number.isFinite(installmentNumber) && installmentNumber > 0 ? installmentNumber : null
 }
 
+function deriveDueDateFromContract(
+  contractDate: string,
+  dueDay: string,
+  description: string,
+  fallbackDueDate: string,
+) {
+  const normalizedFallback = normalizeDate(fallbackDueDate)
+  const baseDate = parseBrDate(contractDate)
+  if (!baseDate) return normalizedFallback
+
+  const installmentNumber = extractInstallmentNumber(description) || 1
+  const parsedDueDay = Number(String(dueDay || '').trim())
+  const referenceDay =
+    Number.isFinite(parsedDueDay) && parsedDueDay >= 1 && parsedDueDay <= 31
+      ? parsedDueDay
+      : baseDate.getDate()
+
+  const targetDate = new Date(
+    baseDate.getFullYear(),
+    baseDate.getMonth() + Math.max(installmentNumber - 1, 0),
+    1,
+    12,
+    0,
+    0,
+  )
+  const lastDayOfMonth = new Date(targetDate.getFullYear(), targetDate.getMonth() + 1, 0, 12, 0, 0).getDate()
+  targetDate.setDate(Math.min(referenceDay, lastDayOfMonth))
+
+  return formatBrDate(targetDate)
+}
+
 function deriveInstallmentAmounts(
   totalAmount: number | null,
   installmentNumber: number | null,
@@ -1502,8 +1630,8 @@ function deriveInstallmentAmounts(
 }
 
 function deriveFinancialStatus(
-  dueDate: string,
   integraStatus: string,
+  sourceFinancialStatus: string,
   amount: number | null,
   openAmount: number | null,
   paidAmount: number | null,
@@ -1511,19 +1639,16 @@ function deriveFinancialStatus(
 ) {
   const normalizedIntegraStatus = normalizeStatus(integraStatus)
   if (normalizedIntegraStatus) return normalizedIntegraStatus
+  const normalizedSourceStatus = normalizeStatus(sourceFinancialStatus)
+  if (normalizedSourceStatus) return normalizedSourceStatus
   if ((paidAmount || 0) > 0 && (openAmount || 0) <= 0) return 'QUITADO'
   if ((upcomingAmount || 0) > 0) return 'A VENCER'
   if ((openAmount || 0) > 0) return 'EM ATRASO'
-
-  const days = dueDate ? diffDaysFromToday(dueDate) : null
-  if (days !== null && days > 0) return 'EM ATRASO'
-  if (days !== null && days <= 0 && (amount || 0) > 0) return 'A VENCER'
   return amount ? 'EM DIA' : ''
 }
 
 function deriveAmounts(
   totalAmount: number | null,
-  dueDate: string,
   status: string,
   amount: number | null,
   description: string,
@@ -1556,13 +1681,12 @@ function deriveAmounts(
     return { openAmount: 0, paidAmount: parsedAmount, upcomingAmount: 0 }
   }
 
-  const days = dueDate ? diffDaysFromToday(dueDate) : null
-  if (days !== null && days > 0) {
+  if (status === 'EM ATRASO') {
     if (totalAmount !== null && totalAmount > parsedAmount) {
       return {
         openAmount: parsedAmount,
-        paidAmount: Math.max(totalAmount - parsedAmount, 0),
-        upcomingAmount: 0,
+        paidAmount: 0,
+        upcomingAmount: Math.max(totalAmount - parsedAmount, 0),
       }
     }
 
@@ -2052,36 +2176,67 @@ async function runAutomation(req: Request): Promise<AutomationResult> {
         if (trello.found) setIfMissing(sources, 'Trello')
 
         const errorParts = [integra.error, trello.error].filter(Boolean) as string[]
-        const dueDate = normalizeDate(integra.dueDate || pdfRecord.dueDate || '')
-        const sourceCandidates = resolveSourceCandidatesForClient(valueAmountLookup, workingRow.normalizedName)
-        const sourceEntry = resolveSelectedSourceCandidate(
-          sourceCandidates,
+        const preparedSourceSelection = prepareSourceSelection(
+          valueAmountLookup,
+          workingRow.normalizedName,
           pdfRecord,
           selectedProcessMatches.get(pdfRecord.recordKey),
           getCell(workingRow.values, 5),
         )
 
+        if (preparedSourceSelection.pendingSelection) {
+          pendingSelections.push(preparedSourceSelection.pendingSelection)
+          continue
+        }
+
+        const sourceEntry = preparedSourceSelection.sourceEntry
+        const sourceCandidates = resolveSourceCandidatesForClient(valueAmountLookup, workingRow.normalizedName)
         if (!sourceEntry && sourceCandidates.length > 1) {
           pendingSelections.push(
             buildPendingProcessSelection(pdfRecord, sourceCandidates, getCell(workingRow.values, 5)),
           )
           continue
         }
+        if (!sourceEntry) {
+          notFound += 1
+          errors += 1
+          logEntries.push({
+            timestamp,
+            rowNumber: matchedRow?.rowNumber ?? null,
+            clientName: workingRow.clientName,
+            status: 'prospeccao_nao_encontrada',
+            action: 'aguardando_confirmacao',
+            sources: ['PDF'],
+            errorMessage: 'Cliente não localizado automaticamente na Prospecção (PRD).',
+            details: [
+              body.pdfFileName ? `Excel: ${body.pdfFileName}` : null,
+              pdfRecord.dueDate ? `Vencimento importado: ${normalizeDate(pdfRecord.dueDate)}` : null,
+              typeof pdfRecord.amount === 'number' ? `Parcela: ${formatCurrency(pdfRecord.amount)}` : null,
+            ]
+              .filter(Boolean)
+              .join(' | '),
+            cardUrl: '',
+          })
+          continue
+        }
 
         const sourceCode = sourceEntry?.code || getCell(workingRow.values, 5)
         const sourceDate = sourceEntry?.date || getCell(workingRow.values, 1)
+        const sourceDueDay = sourceEntry?.dueDay || ''
+        const sourceFinancialStatus = sourceEntry?.financialStatus || getCell(workingRow.values, 15)
         const totalAmount = sourceEntry?.amount ?? parseAmount(getCell(workingRow.values, SHEET_TOTAL_VALUE_COLUMN_INDEX))
         const amount = integra.amount ?? pdfRecord.amount ?? null
         const description = integra.description || String(pdfRecord.description || '').trim()
+        const dueDate = deriveDueDateFromContract(sourceDate, sourceDueDay, description, integra.dueDate || pdfRecord.dueDate || '')
         const status = deriveFinancialStatus(
-          dueDate,
           integra.status,
+          sourceFinancialStatus,
           amount,
           integra.openAmount,
           integra.paidAmount,
           integra.upcomingAmount,
         )
-        const amounts = deriveAmounts(totalAmount, dueDate, status, amount, description, integra)
+        const amounts = deriveAmounts(totalAmount, status, amount, description, integra)
         const updatePlan = buildUpdatePlan(
           workingRow,
           targetColumns,
@@ -2317,32 +2472,62 @@ async function runAutomation(req: Request): Promise<AutomationResult> {
     if (trello.found) setIfMissing(sources, 'Trello')
 
     const errorParts = [integra.error, trello.error].filter(Boolean) as string[]
-    const dueDate = normalizeDate(integra.dueDate || pdfRecord.dueDate || '')
     const amount = integra.amount ?? pdfRecord.amount ?? null
     const description = integra.description || String(pdfRecord.description || '').trim()
+    const preparedSourceSelection = prepareSourceSelection(
+      valueAmountLookup,
+      row.normalizedName,
+      pdfRecord,
+      selectedProcessMatches.get(pdfRecord.recordKey),
+      getCell(row.values, 5),
+    )
+    if (preparedSourceSelection.pendingSelection) {
+      pendingSelections.push(preparedSourceSelection.pendingSelection)
+      return
+    }
+    const sourceEntry = preparedSourceSelection.sourceEntry
+    const sourceCandidates = resolveSourceCandidatesForClient(valueAmountLookup, row.normalizedName)
+    if (!sourceEntry && sourceCandidates.length > 1) {
+      pendingSelections.push(buildPendingProcessSelection(pdfRecord, sourceCandidates, getCell(row.values, 5)))
+      return
+    }
+    if (!sourceEntry) {
+      notFound += 1
+      errors += 1
+      logEntries.push({
+        timestamp,
+        rowNumber: row.rowNumber,
+        clientName: row.clientName,
+        status: 'prospeccao_nao_encontrada',
+        action: 'aguardando_confirmacao',
+        sources: ['PDF'],
+        errorMessage: 'Cliente não localizado automaticamente na Prospecção (PRD).',
+        details: [
+          body.pdfFileName ? `Excel: ${body.pdfFileName}` : null,
+          pdfRecord.dueDate ? `Vencimento importado: ${normalizeDate(pdfRecord.dueDate)}` : null,
+          typeof pdfRecord.amount === 'number' ? `Parcela: ${formatCurrency(pdfRecord.amount)}` : null,
+        ]
+          .filter(Boolean)
+          .join(' | '),
+        cardUrl: '',
+      })
+      return
+    }
+    const sourceCode = sourceEntry?.code || getCell(row.values, 5)
+    const sourceDate = sourceEntry?.date || getCell(row.values, 1)
+    const sourceDueDay = sourceEntry?.dueDay || ''
+    const sourceFinancialStatus = sourceEntry?.financialStatus || getCell(row.values, 15)
+    const totalAmount = sourceEntry?.amount ?? parseAmount(getCell(row.values, SHEET_TOTAL_VALUE_COLUMN_INDEX))
+    const dueDate = deriveDueDateFromContract(sourceDate, sourceDueDay, description, integra.dueDate || pdfRecord.dueDate || '')
     const status = deriveFinancialStatus(
-      dueDate,
       integra.status,
+      sourceFinancialStatus,
       amount,
       integra.openAmount,
       integra.paidAmount,
       integra.upcomingAmount,
     )
-    const sourceCandidates = resolveSourceCandidatesForClient(valueAmountLookup, row.normalizedName)
-    const sourceEntry = resolveSelectedSourceCandidate(
-      sourceCandidates,
-      pdfRecord,
-      selectedProcessMatches.get(pdfRecord.recordKey),
-      getCell(row.values, 5),
-    )
-    if (!sourceEntry && sourceCandidates.length > 1) {
-      pendingSelections.push(buildPendingProcessSelection(pdfRecord, sourceCandidates, getCell(row.values, 5)))
-      return
-    }
-    const sourceCode = sourceEntry?.code || getCell(row.values, 5)
-    const sourceDate = sourceEntry?.date || getCell(row.values, 1)
-    const totalAmount = sourceEntry?.amount ?? parseAmount(getCell(row.values, SHEET_TOTAL_VALUE_COLUMN_INDEX))
-    const amounts = deriveAmounts(totalAmount, dueDate, status, amount, description, integra)
+    const amounts = deriveAmounts(totalAmount, status, amount, description, integra)
     const updatePlan = buildUpdatePlan(
       row,
       targetColumns,
@@ -2449,32 +2634,62 @@ async function runAutomation(req: Request): Promise<AutomationResult> {
     if (trello.found) setIfMissing(sources, 'Trello')
 
     const errorParts = [integra.error, trello.error].filter(Boolean) as string[]
-    const dueDate = normalizeDate(integra.dueDate || pdfRecord.dueDate || '')
     const amount = integra.amount ?? pdfRecord.amount ?? null
     const description = integra.description || String(pdfRecord.description || '').trim()
+    const preparedSourceSelection = prepareSourceSelection(
+      valueAmountLookup,
+      row.normalizedName,
+      pdfRecord,
+      selectedProcessMatches.get(pdfRecord.recordKey),
+      getCell(row.values, 5),
+    )
+    if (preparedSourceSelection.pendingSelection) {
+      pendingSelections.push(preparedSourceSelection.pendingSelection)
+      continue
+    }
+    const sourceEntry = preparedSourceSelection.sourceEntry
+    const sourceCandidates = resolveSourceCandidatesForClient(valueAmountLookup, row.normalizedName)
+    if (!sourceEntry && sourceCandidates.length > 1) {
+      pendingSelections.push(buildPendingProcessSelection(pdfRecord, sourceCandidates, getCell(row.values, 5)))
+      continue
+    }
+    if (!sourceEntry) {
+      notFound += 1
+      errors += 1
+      logEntries.push({
+        timestamp,
+        rowNumber: row.rowNumber,
+        clientName: row.clientName,
+        status: 'prospeccao_nao_encontrada',
+        action: 'aguardando_confirmacao',
+        sources: ['PDF'],
+        errorMessage: 'Cliente não localizado automaticamente na Prospecção (PRD).',
+        details: [
+          body.pdfFileName ? `Excel: ${body.pdfFileName}` : null,
+          pdfRecord.dueDate ? `Vencimento importado: ${normalizeDate(pdfRecord.dueDate)}` : null,
+          typeof pdfRecord.amount === 'number' ? `Parcela: ${formatCurrency(pdfRecord.amount)}` : null,
+        ]
+          .filter(Boolean)
+          .join(' | '),
+        cardUrl: '',
+      })
+      continue
+    }
+    const sourceCode = sourceEntry?.code || getCell(row.values, 5)
+    const sourceDate = sourceEntry?.date || getCell(row.values, 1)
+    const sourceDueDay = sourceEntry?.dueDay || ''
+    const sourceFinancialStatus = sourceEntry?.financialStatus || getCell(row.values, 15)
+    const totalAmount = sourceEntry?.amount ?? parseAmount(getCell(row.values, SHEET_TOTAL_VALUE_COLUMN_INDEX))
+    const dueDate = deriveDueDateFromContract(sourceDate, sourceDueDay, description, integra.dueDate || pdfRecord.dueDate || '')
     const status = deriveFinancialStatus(
-      dueDate,
       integra.status,
+      sourceFinancialStatus,
       amount,
       integra.openAmount,
       integra.paidAmount,
       integra.upcomingAmount,
     )
-    const sourceCandidates = resolveSourceCandidatesForClient(valueAmountLookup, row.normalizedName)
-    const sourceEntry = resolveSelectedSourceCandidate(
-      sourceCandidates,
-      pdfRecord,
-      selectedProcessMatches.get(pdfRecord.recordKey),
-      getCell(row.values, 5),
-    )
-    if (!sourceEntry && sourceCandidates.length > 1) {
-      pendingSelections.push(buildPendingProcessSelection(pdfRecord, sourceCandidates, getCell(row.values, 5)))
-      continue
-    }
-    const sourceCode = sourceEntry?.code || getCell(row.values, 5)
-    const sourceDate = sourceEntry?.date || getCell(row.values, 1)
-    const totalAmount = sourceEntry?.amount ?? parseAmount(getCell(row.values, SHEET_TOTAL_VALUE_COLUMN_INDEX))
-    const amounts = deriveAmounts(totalAmount, dueDate, status, amount, description, integra)
+    const amounts = deriveAmounts(totalAmount, status, amount, description, integra)
     const updatePlan = buildUpdatePlan(
       row,
       targetColumns,

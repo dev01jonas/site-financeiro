@@ -110,6 +110,7 @@ type PendingProcessSelection = {
   pdfAmount: number | null;
   pdfDescription: string;
   suggestedSelectionId: string;
+  reason?: string;
   options: ProcessOption[];
 };
 
@@ -1011,6 +1012,7 @@ export default function Automacao() {
                 <div key={selection.recordKey} className="space-y-3 rounded-2xl border border-border/70 p-4">
                   <div className="space-y-1">
                     <p className="text-base font-semibold">{selection.clientName}</p>
+                    {selection.reason ? <p className="text-xs font-medium text-amber-300">{selection.reason}</p> : null}
                     <p className="text-xs text-muted-foreground">
                       Excel: {selection.pdfDescription || 'Sem descrição'}
                       {selection.pdfAmount !== null
