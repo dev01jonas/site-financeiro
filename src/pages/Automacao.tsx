@@ -120,7 +120,13 @@ type AutomationRequestPayload = {
   pdfFileName?: string;
   pdfRecords: ExtractedRecord[];
   clearLog?: boolean;
+  allowFallbackSelections?: boolean;
   selectedProcessMatches?: Record<string, string>;
+};
+
+type AutomationMutationPayload = {
+  selectedMatches?: Record<string, string>;
+  allowFallbackSelections?: boolean;
 };
 
 const AUTOMATION_BATCH_SIZE = 25;
@@ -473,16 +479,18 @@ export default function Automacao() {
   };
 
   const automationMutation = useMutation({
-    mutationFn: async (selectedMatches: Record<string, string> = {}) => {
+    mutationFn: async (confirmation: AutomationMutationPayload = {}) => {
       if (pdfRecords.length === 0) {
         throw new Error('Selecione um Excel válido antes de executar a automação.');
       }
 
+      const selectedMatches = confirmation.selectedMatches || {};
       const payload = {
         dryRun,
         sheetName: sheetName.trim() || undefined,
         pdfFileName: pdfFileName || undefined,
         pdfRecords,
+        allowFallbackSelections: confirmation.allowFallbackSelections === true,
         selectedProcessMatches: selectedMatches,
       };
 
@@ -703,7 +711,10 @@ export default function Automacao() {
               type="button"
               className="h-11 w-full rounded-xl bg-[linear-gradient(135deg,hsl(var(--primary)),hsl(216_48%_34%))]"
               disabled={automationMutation.isPending || pdfLoading}
-              onClick={() => automationMutation.mutate({})}
+              onClick={() => {
+                setSelectedProcessMatches({});
+                automationMutation.mutate({});
+              }}
             >
               {automationMutation.isPending ? (
                 <>
@@ -1072,7 +1083,12 @@ export default function Automacao() {
             <Button
               type="button"
               disabled={!allPendingSelectionsFilled || automationMutation.isPending}
-              onClick={() => automationMutation.mutate(selectedProcessMatches)}
+              onClick={() =>
+                automationMutation.mutate({
+                  selectedMatches: selectedProcessMatches,
+                  allowFallbackSelections: true,
+                })
+              }
             >
               Confirmar e preencher
             </Button>

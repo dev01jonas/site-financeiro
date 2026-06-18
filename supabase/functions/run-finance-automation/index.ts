@@ -59,6 +59,7 @@ type AutomationBody = {
   pdfFileName?: string
   pdfRecords?: PdfRecord[]
   clearLog?: boolean
+  allowFallbackSelections?: boolean
   selectedProcessMatches?: Record<string, string> | Array<{ recordKey: string; selectionId: string }>
 }
 
@@ -666,7 +667,7 @@ function scoreFallbackSourceCandidate(entry: SheetAmountEntry, normalizedClientN
   const sourceTokens = new Set(entry.normalizedName.split(' ').filter(Boolean))
   const targetTokens = normalizedClientName.split(' ').filter(Boolean)
   const sharedTokens = targetTokens.filter((token) => sourceTokens.has(token))
-  if (sharedTokens.length === 0) return 0
+  if (sharedTokens.length < 2) return 0
 
   const lastTargetToken = targetTokens[targetTokens.length - 1] || ''
   const lastSourceToken = entry.normalizedName.split(' ').filter(Boolean).slice(-1)[0] || ''
@@ -949,6 +950,7 @@ function prepareSourceSelection(
   pdfRecord: PreparedPdfRecord,
   selectedSelectionId: string | undefined,
   currentCode: string,
+  allowFallbackSelections: boolean,
 ) {
   const directCandidates = resolveSourceCandidatesForClient(lookup, normalizedClientName)
   if (directCandidates.length > 0) {
@@ -958,7 +960,7 @@ function prepareSourceSelection(
     }
   }
 
-  if (selectedSelectionId) {
+  if (allowFallbackSelections && selectedSelectionId) {
     const selectedFallback = lookup.entries.find((entry) => entry.selectionId === selectedSelectionId) || null
     if (selectedFallback) {
       return {
@@ -2005,6 +2007,7 @@ async function runAutomation(req: Request): Promise<AutomationResult> {
   const pdfRecords = Array.isArray(body.pdfRecords) ? body.pdfRecords : []
   const clearLog = body.clearLog !== false
   const selectedProcessMatches = normalizeSelectedProcessMatches(body.selectedProcessMatches)
+  const allowFallbackSelections = body.allowFallbackSelections === true
 
   if (!spreadsheetId) {
     throw new Error('Variavel obrigatoria ausente: GOOGLE_SPREADSHEET_ID')
@@ -2182,6 +2185,7 @@ async function runAutomation(req: Request): Promise<AutomationResult> {
           pdfRecord,
           selectedProcessMatches.get(pdfRecord.recordKey),
           getCell(workingRow.values, 5),
+          allowFallbackSelections,
         )
 
         if (preparedSourceSelection.pendingSelection) {
@@ -2480,6 +2484,7 @@ async function runAutomation(req: Request): Promise<AutomationResult> {
       pdfRecord,
       selectedProcessMatches.get(pdfRecord.recordKey),
       getCell(row.values, 5),
+      allowFallbackSelections,
     )
     if (preparedSourceSelection.pendingSelection) {
       pendingSelections.push(preparedSourceSelection.pendingSelection)
@@ -2642,6 +2647,7 @@ async function runAutomation(req: Request): Promise<AutomationResult> {
       pdfRecord,
       selectedProcessMatches.get(pdfRecord.recordKey),
       getCell(row.values, 5),
+      allowFallbackSelections,
     )
     if (preparedSourceSelection.pendingSelection) {
       pendingSelections.push(preparedSourceSelection.pendingSelection)
