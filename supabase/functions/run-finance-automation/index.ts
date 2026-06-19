@@ -119,6 +119,7 @@ type PreparedPdfRecord = PdfRecord & {
   matchStem: string
   truncated: boolean
   recordKey: string
+  entryFirstPairKey?: string
 }
 
 type TrelloCard = {
@@ -991,6 +992,27 @@ function buildPdfRecordIndex(pdfRecords: PdfRecord[]) {
     exactLookup.set(normalizedName, bucket)
   }
 
+  const possibleEntryFirstPairs = new Map<string, PreparedPdfRecord[]>()
+  for (const record of records) {
+    if (!isEntryOrFirstInstallment(record.description || '')) continue
+    const amountKey = amountPairKey(record.amount)
+    if (!amountKey) continue
+    const key = `${record.normalizedName}__${amountKey}`
+    const bucket = possibleEntryFirstPairs.get(key) || []
+    bucket.push(record)
+    possibleEntryFirstPairs.set(key, bucket)
+  }
+
+  for (const [key, bucket] of possibleEntryFirstPairs.entries()) {
+    const hasEntry = bucket.some((record) => isEntryDescription(record.description || ''))
+    const hasFirstInstallment = bucket.some((record) => isFirstInstallmentDescription(record.description || ''))
+    if (!hasEntry || !hasFirstInstallment) continue
+
+    for (const record of bucket) {
+      record.entryFirstPairKey = key
+    }
+  }
+
   return { records, exactLookup }
 }
 
@@ -1075,6 +1097,23 @@ function parseInstallmentNumber(description: string) {
   if (!match) return null
   const parsed = Number(match[1])
   return Number.isFinite(parsed) ? parsed : null
+}
+
+function amountPairKey(amount: number | null | undefined) {
+  return typeof amount === 'number' && Number.isFinite(amount) ? String(Math.round(amount * 100)) : ''
+}
+
+function isEntryDescription(description: string) {
+  const normalized = normalizeHeader(description)
+  return normalized === 'ENTRADA' || normalized.startsWith('ENTRADA_')
+}
+
+function isFirstInstallmentDescription(description: string) {
+  return parseInstallmentNumber(description) === 1
+}
+
+function isEntryOrFirstInstallment(description: string) {
+  return isEntryDescription(description) || isFirstInstallmentDescription(description)
 }
 
 function buildProcessOption(entry: SheetAmountEntry): ProcessOption {
@@ -2237,8 +2276,7 @@ function deriveRecordStatus(trello: TrelloLookupResult) {
 }
 
 function isEntryManualAdjustment(selectedMatch: SelectedProcessMatch | undefined) {
-  const description = normalizeHeader(selectedMatch?.description || '')
-  return description === 'ENTRADA' || description.startsWith('ENTRADA_')
+  return isEntryDescription(selectedMatch?.description || '')
 }
 
 function deriveTrelloForUpdate(trello: TrelloLookupResult, selectedMatch: SelectedProcessMatch | undefined) {
@@ -2617,6 +2655,14 @@ async function runAutomation(req: Request): Promise<AutomationResult> {
     const valueAmountLookup = await loadValueSourceRows(accessToken, spreadsheetId, sheetName, sheetValues)
     const sheetLookup = buildSheetRowLookup(candidateRows)
     const pdfIndex = buildPdfRecordIndex(pdfRecords)
+    const selectedEntryFirstPairMatches = new Map<string, SelectedProcessMatch>()
+    for (const record of pdfIndex.records) {
+      if (!record.entryFirstPairKey) continue
+      const match = selectedProcessMatches.get(record.recordKey)
+      if (match?.selectionId && !selectedEntryFirstPairMatches.has(record.entryFirstPairKey)) {
+        selectedEntryFirstPairMatches.set(record.entryFirstPairKey, match)
+      }
+    }
     const usedRowNumbers = new Set<number>()
     const integraEnabled = Boolean(Deno.env.get('INTEGRA_API_URL'))
     const integraService = new IntegraService()
@@ -2771,7 +2817,9 @@ async function runAutomation(req: Request): Promise<AutomationResult> {
 
     for (const pdfRecord of pdfIndex.records) {
       try {
-        const selectedMatch = selectedProcessMatches.get(pdfRecord.recordKey)
+        const selectedMatch =
+          selectedProcessMatches.get(pdfRecord.recordKey) ||
+          (pdfRecord.entryFirstPairKey ? selectedEntryFirstPairMatches.get(pdfRecord.entryFirstPairKey) : undefined)
         const selectedSource = valueAmountLookup.entries.find(
           (entry) => entry.selectionId === selectedMatch?.selectionId,
         )

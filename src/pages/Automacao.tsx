@@ -269,6 +269,50 @@ function mergePendingSelections(
   return [...map.values()];
 }
 
+function normalizeAutomationText(value: unknown) {
+  return String(value || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^A-Za-z0-9]+/g, ' ')
+    .trim()
+    .toUpperCase();
+}
+
+function amountSelectionKey(amount: number | null) {
+  return typeof amount === 'number' && Number.isFinite(amount) ? String(Math.round(amount * 100)) : '';
+}
+
+function getSelectionInstallmentNumber(description: string) {
+  const match = String(description || '').match(/\b(\d{1,3})\s*(?:a|ª|o|º)?\s*parcela\b/i);
+  if (!match) return null;
+  const parsed = Number(match[1]);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function isEntrySelection(description: string) {
+  const normalized = normalizeAutomationText(description);
+  return normalized === 'ENTRADA' || normalized.startsWith('ENTRADA ');
+}
+
+function isFirstInstallmentSelection(description: string) {
+  return getSelectionInstallmentNumber(description) === 1;
+}
+
+function areEntryAndFirstInstallmentPair(left: PendingProcessSelection, right: PendingProcessSelection) {
+  if (left.recordKey === right.recordKey) return false;
+  if (normalizeAutomationText(left.clientName) !== normalizeAutomationText(right.clientName)) return false;
+  if (!amountSelectionKey(left.pdfAmount) || amountSelectionKey(left.pdfAmount) !== amountSelectionKey(right.pdfAmount)) {
+    return false;
+  }
+
+  const leftIsEntry = isEntrySelection(left.pdfDescription);
+  const rightIsEntry = isEntrySelection(right.pdfDescription);
+  const leftIsFirst = isFirstInstallmentSelection(left.pdfDescription);
+  const rightIsFirst = isFirstInstallmentSelection(right.pdfDescription);
+
+  return (leftIsEntry && rightIsFirst) || (rightIsEntry && leftIsFirst);
+}
+
 function mergeAutomationResults(
   current: AutomationResult | null,
   incoming: AutomationResult,
@@ -1102,10 +1146,20 @@ export default function Automacao() {
                   <RadioGroup
                     value={selectedProcessMatches[selection.recordKey] || ''}
                     onValueChange={(value) =>
-                      setSelectedProcessMatches((current) => ({
-                        ...current,
-                        [selection.recordKey]: value,
-                      }))
+                      setSelectedProcessMatches((current) => {
+                        const next = {
+                          ...current,
+                          [selection.recordKey]: value,
+                        };
+
+                        for (const pairedSelection of pendingSelections) {
+                          if (areEntryAndFirstInstallmentPair(selection, pairedSelection)) {
+                            next[pairedSelection.recordKey] = value;
+                          }
+                        }
+
+                        return next;
+                      })
                     }
                     className="space-y-3"
                   >
