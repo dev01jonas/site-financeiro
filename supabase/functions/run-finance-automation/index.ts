@@ -560,6 +560,32 @@ function isMonthSeparator(value: string) {
   return MONTH_NAMES.some((month) => normalized === normalizeHeader(month))
 }
 
+function resolveMonthName(value: string) {
+  const normalized = normalizeHeader(value)
+  const monthByName = MONTH_NAMES.find((month) => normalizeHeader(month) === normalized)
+  if (monthByName) return monthByName
+
+  const date = parseBrDate(value)
+  if (!date) return ''
+  return MONTH_NAMES[date.getMonth()] || ''
+}
+
+function findLastVisibleMonth(values: SheetValues) {
+  for (let index = values.length - 1; index >= 0; index -= 1) {
+    const row = values[index] || []
+    for (const cell of row) {
+      const text = String(cell || '').trim()
+      const monthName = isMonthSeparator(text) ? resolveMonthName(text) : ''
+      if (monthName) return monthName
+    }
+
+    const dataMonthName = resolveMonthName(getCell(row, 1))
+    if (dataMonthName) return dataMonthName
+  }
+
+  return ''
+}
+
 function normalizeStatus(value: string) {
   const normalized = normalizeHeader(value)
   if (!normalized) return ''
@@ -1181,6 +1207,12 @@ function createEmptyRow(length: number) {
   return Array.from({ length }, () => '')
 }
 
+function createMonthSeparatorRow(monthName: string, length: number) {
+  const row = createEmptyRow(length)
+  row[SHEET_TOTAL_VALUE_COLUMN_INDEX - 1] = monthName
+  return row
+}
+
 function base64Url(input: Uint8Array | string) {
   const bytes = typeof input === 'string' ? new TextEncoder().encode(input) : input
   let binary = ''
@@ -1414,6 +1446,39 @@ class GoogleSheetsService {
     await this.request(':batchUpdate', {
       method: 'POST',
       body: JSON.stringify({ requests }),
+    })
+  }
+
+  async formatMonthSeparatorRows(sheetName: string, rowNumbers: number[]) {
+    const uniqueRows = [...new Set(rowNumbers)].filter((rowNumber) => rowNumber >= 2)
+    if (uniqueRows.length === 0) return
+
+    const { sheetId } = await this.getSheetProperties(sheetName)
+    await this.request(':batchUpdate', {
+      method: 'POST',
+      body: JSON.stringify({
+        requests: uniqueRows.map((rowNumber) => ({
+          repeatCell: {
+            range: {
+              sheetId,
+              startRowIndex: rowNumber - 1,
+              endRowIndex: rowNumber,
+              startColumnIndex: TARGET_START_COLUMN_INDEX - 1,
+              endColumnIndex: TARGET_END_COLUMN_INDEX,
+            },
+            cell: {
+              userEnteredFormat: {
+                backgroundColor: hexToGoogleColor('#cfe2f3'),
+                horizontalAlignment: 'CENTER',
+                textFormat: {
+                  bold: true,
+                },
+              },
+            },
+            fields: 'userEnteredFormat(backgroundColor,horizontalAlignment,textFormat.bold)',
+          },
+        })),
+      }),
     })
   }
 
@@ -2366,6 +2431,7 @@ async function runAutomation(req: Request): Promise<AutomationResult> {
     const logEntries: AutomationLogEntry[] = []
     const pendingSelections: PendingProcessSelection[] = []
     const updateRequests: Array<{ range: string; values: SheetValues }> = []
+    const monthSeparatorRows: number[] = []
     let updated = 0
     let refreshed = 0
     let errors = 0
@@ -2376,6 +2442,7 @@ async function runAutomation(req: Request): Promise<AutomationResult> {
     let dashboardPaidAmount = 0
     let dashboardUpcomingAmount = 0
     const lastFilledRow = findLastFilledRow(sheetValues)
+    let activeMonthName = findLastVisibleMonth(sheetValues)
     let nextRowNumber = lastFilledRow + 1
     let maxRequestedRow =
       candidateRows.length > 0 ? Math.max(lastFilledRow, ...candidateRows.map((row) => row.rowNumber)) : lastFilledRow
@@ -2410,6 +2477,24 @@ async function runAutomation(req: Request): Promise<AutomationResult> {
       if (params.created) {
         createdClients += 1
       }
+    }
+
+    const addMonthSeparatorIfNeeded = (row: SheetClientRow, sourceDate: string) => {
+      const monthName = resolveMonthName(sourceDate)
+      if (!monthName || monthName === activeMonthName) return
+
+      const separatorRowNumber = row.rowNumber
+      addSheetRequest(
+        updateRequests,
+        sheetName,
+        `${quoteSheetName('PLACEHOLDER')}!A${separatorRowNumber}:${columnLetter(TARGET_END_COLUMN_INDEX)}${separatorRowNumber}`,
+        [createMonthSeparatorRow(monthName, Math.max(sheetHeaders.length, TARGET_END_COLUMN_INDEX))],
+      )
+      monthSeparatorRows.push(separatorRowNumber)
+      activeMonthName = monthName
+      row.rowNumber += 1
+      nextRowNumber += 1
+      maxRequestedRow = Math.max(maxRequestedRow, row.rowNumber)
     }
 
     for (const pdfRecord of pdfIndex.records) {
@@ -2511,6 +2596,9 @@ async function runAutomation(req: Request): Promise<AutomationResult> {
 
         const sourceCode = sourceEntry?.code || getCell(workingRow.values, 5)
         const sourceDate = sourceEntry?.date || getCell(workingRow.values, 1)
+        if (isCreated) {
+          addMonthSeparatorIfNeeded(workingRow, sourceDate)
+        }
         const sourceDueDay = sourceEntry?.dueDay || ''
         const sourceFinancialStatus = sourceEntry?.financialStatus || getCell(workingRow.values, 15)
         const totalAmount =
@@ -2662,6 +2750,7 @@ async function runAutomation(req: Request): Promise<AutomationResult> {
         await sheets.ensureRowCapacity(sheetName, maxRequestedRow)
         await sheets.ensureDropdownFormatting(sheetName, targetColumns, maxRequestedRow)
         await sheets.batchUpdateValues(updateRequests)
+        await sheets.formatMonthSeparatorRows(sheetName, monthSeparatorRows)
       } catch (error) {
         updateFailureMessage = `Falha ao atualizar Google Sheets: ${error instanceof Error ? error.message : 'erro desconhecido'}`
         errors += 1
@@ -2752,6 +2841,7 @@ async function runAutomation(req: Request): Promise<AutomationResult> {
   const logEntries: AutomationLogEntry[] = []
   const pendingSelections: PendingProcessSelection[] = []
   const updateRequests: Array<{ range: string; values: SheetValues }> = []
+  const monthSeparatorRows: number[] = []
   let updated = 0
   let refreshed = 0
   let ignored = 0
@@ -2759,6 +2849,24 @@ async function runAutomation(req: Request): Promise<AutomationResult> {
   let errors = 0
   let matched = 0
   let nextRowNumber = findLastFilledRow(values) + 1
+  let activeMonthName = findLastVisibleMonth(values)
+
+  const addMonthSeparatorIfNeeded = (row: SheetClientRow, sourceDate: string) => {
+    const monthName = resolveMonthName(sourceDate)
+    if (!monthName || monthName === activeMonthName) return
+
+    const separatorRowNumber = row.rowNumber
+    addSheetRequest(
+      updateRequests,
+      sheetName,
+      `${quoteSheetName('PLACEHOLDER')}!A${separatorRowNumber}:${columnLetter(TARGET_END_COLUMN_INDEX)}${separatorRowNumber}`,
+      [createMonthSeparatorRow(monthName, Math.max(headers.length, TARGET_END_COLUMN_INDEX))],
+    )
+    monthSeparatorRows.push(separatorRowNumber)
+    activeMonthName = monthName
+    row.rowNumber += 1
+    nextRowNumber += 1
+  }
 
   const processMatchedRow = async (
     row: SheetClientRow,
@@ -2823,6 +2931,9 @@ async function runAutomation(req: Request): Promise<AutomationResult> {
     }
     const sourceCode = sourceEntry?.code || getCell(row.values, 5)
     const sourceDate = sourceEntry?.date || getCell(row.values, 1)
+    if (options.created) {
+      addMonthSeparatorIfNeeded(row, sourceDate)
+    }
     const sourceDueDay = sourceEntry?.dueDay || ''
     const sourceFinancialStatus = sourceEntry?.financialStatus || getCell(row.values, 15)
     const totalAmount =
@@ -3146,8 +3257,11 @@ async function runAutomation(req: Request): Promise<AutomationResult> {
   let updateFailureMessage = ''
   if (!dryRun && updateRequests.length > 0) {
     try {
-      await sheets.ensureDropdownFormatting(sheetName, targetColumns, Math.max(values.length, nextRowNumber))
+      const maxRequestedRow = Math.max(values.length, nextRowNumber)
+      await sheets.ensureRowCapacity(sheetName, maxRequestedRow)
+      await sheets.ensureDropdownFormatting(sheetName, targetColumns, maxRequestedRow)
       await sheets.batchUpdateValues(updateRequests)
+      await sheets.formatMonthSeparatorRows(sheetName, monthSeparatorRows)
     } catch (error) {
       updateFailureMessage = `Falha ao atualizar Google Sheets: ${error instanceof Error ? error.message : 'erro desconhecido'}`
       errors += 1
