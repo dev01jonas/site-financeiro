@@ -711,6 +711,63 @@ function findLastFilledRow(values: SheetValues) {
   return 1
 }
 
+function getYearMonthKey(value: string) {
+  const date = parseBrDate(value)
+  if (!date) return ''
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`
+}
+
+function compareYearMonth(left: string, right: string) {
+  return left.localeCompare(right)
+}
+
+function findMonthInsertionBase(values: SheetValues, sourceDate: string) {
+  const targetKey = getYearMonthKey(sourceDate)
+  const monthName = resolveMonthName(sourceDate)
+  const lastFilledRow = findLastFilledRow(values)
+  if (!targetKey || !monthName) {
+    return { rowNumber: lastFilledRow + 1, monthName, needsSeparator: false }
+  }
+
+  let lastSameMonthRow = 0
+  let firstLaterMonthRow = 0
+
+  for (let index = 1; index < values.length; index += 1) {
+    const row = values[index] || []
+    const rowKey = getYearMonthKey(getCell(row, 1))
+    if (!rowKey) continue
+
+    if (rowKey === targetKey) {
+      lastSameMonthRow = index + 1
+      continue
+    }
+
+    if (!firstLaterMonthRow && compareYearMonth(rowKey, targetKey) > 0) {
+      const previousRow = values[index - 1] || []
+      const previousRowHasMonthSeparator = previousRow.some((cell) => isMonthSeparator(String(cell || '').trim()))
+      firstLaterMonthRow = previousRowHasMonthSeparator ? index : index + 1
+    }
+  }
+
+  if (lastSameMonthRow) {
+    return { rowNumber: lastSameMonthRow + 1, monthName, needsSeparator: false }
+  }
+
+  return {
+    rowNumber: firstLaterMonthRow || lastFilledRow + 1,
+    monthName,
+    needsSeparator: true,
+  }
+}
+
+function shiftA1Rows(range: string, startRow: number, delta: number) {
+  return range.replace(/([A-Z]+)(\d+)/g, (match, column, rowText) => {
+    const rowNumber = Number(rowText)
+    if (!Number.isFinite(rowNumber) || rowNumber < startRow) return match
+    return `${column}${rowNumber + delta}`
+  })
+}
+
 type SheetAmountEntry = {
   selectionId: string
   rowNumber: number
@@ -1476,6 +1533,28 @@ class GoogleSheetsService {
               },
             },
             fields: 'userEnteredFormat(backgroundColor,horizontalAlignment,textFormat.bold)',
+          },
+        })),
+      }),
+    })
+  }
+
+  async insertRows(sheetName: string, insertions: Array<{ rowNumber: number; count: number }>) {
+    if (insertions.length === 0) return
+
+    const { sheetId } = await this.getSheetProperties(sheetName)
+    await this.request(':batchUpdate', {
+      method: 'POST',
+      body: JSON.stringify({
+        requests: insertions.map((insertion) => ({
+          insertDimension: {
+            range: {
+              sheetId,
+              dimension: 'ROWS',
+              startIndex: insertion.rowNumber - 1,
+              endIndex: insertion.rowNumber - 1 + insertion.count,
+            },
+            inheritFromBefore: insertion.rowNumber > 2,
           },
         })),
       }),
@@ -2432,6 +2511,13 @@ async function runAutomation(req: Request): Promise<AutomationResult> {
     const pendingSelections: PendingProcessSelection[] = []
     const updateRequests: Array<{ range: string; values: SheetValues }> = []
     const monthSeparatorRows: number[] = []
+    const rowInsertions: Array<{ rowNumber: number; count: number }> = []
+    type MonthInsertionCursor = {
+      nextRowNumber: number
+      monthName: string
+      needsSeparator: boolean
+    }
+    const monthCursors = new Map<string, MonthInsertionCursor>()
     let updated = 0
     let refreshed = 0
     let errors = 0
@@ -2442,7 +2528,6 @@ async function runAutomation(req: Request): Promise<AutomationResult> {
     let dashboardPaidAmount = 0
     let dashboardUpcomingAmount = 0
     const lastFilledRow = findLastFilledRow(sheetValues)
-    let activeMonthName = findLastVisibleMonth(sheetValues)
     let nextRowNumber = lastFilledRow + 1
     let maxRequestedRow =
       candidateRows.length > 0 ? Math.max(lastFilledRow, ...candidateRows.map((row) => row.rowNumber)) : lastFilledRow
@@ -2479,22 +2564,84 @@ async function runAutomation(req: Request): Promise<AutomationResult> {
       }
     }
 
-    const addMonthSeparatorIfNeeded = (row: SheetClientRow, sourceDate: string) => {
-      const monthName = resolveMonthName(sourceDate)
-      if (!monthName || monthName === activeMonthName) return
+    const shiftPlannedRows = (startRow: number, delta: number, exceptCursor?: MonthInsertionCursor) => {
+      for (const request of updateRequests) {
+        request.range = shiftA1Rows(request.range, startRow, delta)
+      }
 
-      const separatorRowNumber = row.rowNumber
-      addSheetRequest(
-        updateRequests,
-        sheetName,
-        `${quoteSheetName('PLACEHOLDER')}!A${separatorRowNumber}:${columnLetter(TARGET_END_COLUMN_INDEX)}${separatorRowNumber}`,
-        [createMonthSeparatorRow(monthName, Math.max(sheetHeaders.length, TARGET_END_COLUMN_INDEX))],
+      for (const entry of logEntries) {
+        if (entry.rowNumber && entry.rowNumber >= startRow) {
+          entry.rowNumber += delta
+        }
+      }
+
+      for (let index = 0; index < monthSeparatorRows.length; index += 1) {
+        if (monthSeparatorRows[index] >= startRow) {
+          monthSeparatorRows[index] += delta
+        }
+      }
+
+      for (const insertion of rowInsertions) {
+        if (insertion.rowNumber >= startRow) {
+          insertion.rowNumber += delta
+        }
+      }
+
+      for (const cursor of monthCursors.values()) {
+        if (cursor !== exceptCursor && cursor.nextRowNumber >= startRow) {
+          cursor.nextRowNumber += delta
+        }
+      }
+
+      maxRequestedRow += delta
+      nextRowNumber = Math.max(nextRowNumber, maxRequestedRow + 1)
+    }
+
+    const getShiftedExistingRowNumber = (rowNumber: number) =>
+      rowInsertions.reduce(
+        (shiftedRowNumber, insertion) =>
+          insertion.rowNumber <= shiftedRowNumber ? shiftedRowNumber + insertion.count : shiftedRowNumber,
+        rowNumber,
       )
-      monthSeparatorRows.push(separatorRowNumber)
-      activeMonthName = monthName
-      row.rowNumber += 1
-      nextRowNumber += 1
-      maxRequestedRow = Math.max(maxRequestedRow, row.rowNumber)
+
+    const reserveCreatedRow = (sourceDate: string) => {
+      const key = getYearMonthKey(sourceDate) || `sem-data-${nextRowNumber}`
+      let cursor = monthCursors.get(key)
+      if (!cursor) {
+        const base = findMonthInsertionBase(sheetValues, sourceDate)
+        cursor = {
+          nextRowNumber: getShiftedExistingRowNumber(base.rowNumber),
+          monthName: base.monthName,
+          needsSeparator: base.needsSeparator,
+        }
+        monthCursors.set(key, cursor)
+      }
+
+      const insertionRow = cursor.nextRowNumber
+      const shouldCreateSeparator = Boolean(cursor.needsSeparator && cursor.monthName)
+      const insertedRowCount = shouldCreateSeparator ? 2 : 1
+
+      shiftPlannedRows(insertionRow, insertedRowCount, cursor)
+      rowInsertions.push({ rowNumber: insertionRow, count: insertedRowCount })
+
+      let clientRowNumber = insertionRow
+      if (shouldCreateSeparator) {
+        addSheetRequest(
+          updateRequests,
+          sheetName,
+          `${quoteSheetName('PLACEHOLDER')}!A${insertionRow}:${columnLetter(TARGET_END_COLUMN_INDEX)}${insertionRow}`,
+          [createMonthSeparatorRow(cursor.monthName, Math.max(sheetHeaders.length, TARGET_END_COLUMN_INDEX))],
+        )
+        monthSeparatorRows.push(insertionRow)
+        clientRowNumber = insertionRow + 1
+      }
+
+      cursor.needsSeparator = false
+      cursor.nextRowNumber = clientRowNumber + 1
+      maxRequestedRow = Math.max(maxRequestedRow, clientRowNumber)
+      nextRowNumber = Math.max(nextRowNumber, cursor.nextRowNumber)
+
+      return clientRowNumber
     }
 
     for (const pdfRecord of pdfIndex.records) {
@@ -2509,19 +2656,21 @@ async function runAutomation(req: Request): Promise<AutomationResult> {
           usedRowNumbers,
           selectedSource?.code || '',
         )
-        const isCreated = !matchedRow
-        const workingRow: SheetClientRow = matchedRow || {
-          rowNumber: nextRowNumber,
+        const shiftedMatchedRow = matchedRow
+          ? {
+              ...matchedRow,
+              rowNumber: getShiftedExistingRowNumber(matchedRow.rowNumber),
+            }
+          : null
+        const isCreated = !shiftedMatchedRow
+        const workingRow: SheetClientRow = shiftedMatchedRow || {
+          rowNumber: 0,
           clientName: pdfRecord.name,
           normalizedName: normalizeClientName(pdfRecord.name),
           values: createEmptyRow(Math.max(sheetHeaders.length, TARGET_END_COLUMN_INDEX)),
         }
 
-        if (!matchedRow) {
-          workingRow.values[SHEET_CLIENT_COLUMN_INDEX - 1] = pdfRecord.name
-          maxRequestedRow = Math.max(maxRequestedRow, workingRow.rowNumber)
-          nextRowNumber += 1
-        } else {
+        if (matchedRow) {
           usedRowNumbers.add(matchedRow.rowNumber)
         }
 
@@ -2576,7 +2725,7 @@ async function runAutomation(req: Request): Promise<AutomationResult> {
           errors += 1
           logEntries.push({
             timestamp,
-            rowNumber: matchedRow?.rowNumber ?? null,
+            rowNumber: shiftedMatchedRow?.rowNumber ?? null,
             clientName: workingRow.clientName,
             status: 'prospeccao_nao_encontrada',
             action: 'aguardando_confirmacao',
@@ -2597,7 +2746,8 @@ async function runAutomation(req: Request): Promise<AutomationResult> {
         const sourceCode = sourceEntry?.code || getCell(workingRow.values, 5)
         const sourceDate = sourceEntry?.date || getCell(workingRow.values, 1)
         if (isCreated) {
-          addMonthSeparatorIfNeeded(workingRow, sourceDate)
+          workingRow.rowNumber = reserveCreatedRow(sourceDate)
+          workingRow.values[SHEET_CLIENT_COLUMN_INDEX - 1] = pdfRecord.name
         }
         const sourceDueDay = sourceEntry?.dueDay || ''
         const sourceFinancialStatus = sourceEntry?.financialStatus || getCell(workingRow.values, 15)
@@ -2748,6 +2898,7 @@ async function runAutomation(req: Request): Promise<AutomationResult> {
     if (!dryRun && updateRequests.length > 0) {
       try {
         await sheets.ensureRowCapacity(sheetName, maxRequestedRow)
+        await sheets.insertRows(sheetName, rowInsertions)
         await sheets.ensureDropdownFormatting(sheetName, targetColumns, maxRequestedRow)
         await sheets.batchUpdateValues(updateRequests)
         await sheets.formatMonthSeparatorRows(sheetName, monthSeparatorRows)
