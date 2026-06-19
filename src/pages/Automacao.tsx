@@ -125,7 +125,7 @@ type ManualProcessAdjustment = {
 };
 
 type SelectedProcessMatchPayload = ManualProcessAdjustment & {
-  selectionId: string;
+  selectionId?: string;
 };
 
 type AutomationRequestPayload = {
@@ -510,15 +510,23 @@ export default function Automacao() {
   const buildSelectedProcessPayload = () => {
     const payload: Record<string, SelectedProcessMatchPayload> = {};
 
-    for (const [recordKey, selectionId] of Object.entries(selectedProcessMatches)) {
-      if (!selectionId) continue;
+    const recordKeys = new Set([
+      ...Object.keys(selectedProcessMatches),
+      ...Object.keys(manualProcessAdjustments),
+    ]);
+
+    for (const recordKey of recordKeys) {
+      const selectionId = selectedProcessMatches[recordKey] || '';
       const adjustment = manualProcessAdjustments[recordKey] || {};
       const cleanedAdjustment = Object.fromEntries(
         Object.entries(adjustment).filter(([, value]) => String(value || '').trim()),
       ) as ManualProcessAdjustment;
+      const hasManualAdjustment = Object.keys(cleanedAdjustment).length > 0;
+
+      if (!selectionId && !hasManualAdjustment) continue;
 
       payload[recordKey] = {
-        selectionId,
+        ...(selectionId ? { selectionId } : {}),
         ...cleanedAdjustment,
       };
     }
@@ -582,8 +590,15 @@ export default function Automacao() {
   });
 
   const allPendingSelectionsFilled = useMemo(
-    () => pendingSelections.every((selection) => Boolean(selectedProcessMatches[selection.recordKey])),
-    [pendingSelections, selectedProcessMatches],
+    () =>
+      pendingSelections.every((selection) => {
+        const hasSelection = Boolean(selectedProcessMatches[selection.recordKey]);
+        const hasManualAdjustment = Object.values(manualProcessAdjustments[selection.recordKey] || {}).some((value) =>
+          String(value || '').trim(),
+        );
+        return hasSelection || hasManualAdjustment;
+      }),
+    [manualProcessAdjustments, pendingSelections, selectedProcessMatches],
   );
 
   const automationDashboard = useMemo(
@@ -1124,11 +1139,27 @@ export default function Automacao() {
                   </RadioGroup>
 
                   <div className="rounded-xl border border-dashed border-border/70 bg-background/40 p-3">
-                    <div className="mb-3">
-                      <p className="text-sm font-semibold">Ajuste manual desta cobrança</p>
-                      <p className="text-xs text-muted-foreground">
-                        Use só quando o Excel trouxer combo, valor somado ou vencimento diferente. Se a descrição for Entrada, a régua continua vindo do Trello; outros ajustes manuais entram como Renegociado.
-                      </p>
+                    <div className="mb-3 flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+                      <div>
+                        <p className="text-sm font-semibold">Ajuste manual desta cobrança</p>
+                        <p className="text-xs text-muted-foreground">
+                          Use só quando o Excel trouxer combo, valor somado ou vencimento diferente. Se a descrição for Entrada, a régua continua vindo do Trello; outros ajustes manuais entram como Renegociado.
+                        </p>
+                      </div>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        className="shrink-0"
+                        onClick={() =>
+                          setSelectedProcessMatches((current) => ({
+                            ...current,
+                            [selection.recordKey]: '',
+                          }))
+                        }
+                      >
+                        Usar só ajuste manual
+                      </Button>
                     </div>
                     <div className="grid gap-3 md:grid-cols-3">
                       <div className="space-y-1.5">

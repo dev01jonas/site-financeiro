@@ -963,7 +963,6 @@ function normalizeSelectedProcessMatches(
     if (!input || typeof input !== 'object') return null
 
     const selectionId = typeof input.selectionId === 'string' ? input.selectionId : ''
-    if (!selectionId) return null
     const openAmount = parseOptionalAmount(input.openAmount)
     const paidAmount = parseOptionalAmount(input.paidAmount)
     const upcomingAmount = parseOptionalAmount(input.upcomingAmount)
@@ -972,6 +971,9 @@ function normalizeSelectedProcessMatches(
     const dueDate = normalizeDate(input.dueDate)
     const description = typeof input.description === 'string' ? input.description.trim() : ''
     const hasManualAmounts = openAmount !== null || paidAmount !== null || upcomingAmount !== null
+    const hasManualAdjustment = hasManualAmounts || totalAmount !== null || amount !== null || Boolean(dueDate || description)
+
+    if (!selectionId && !hasManualAdjustment) return null
 
     return {
       selectionId,
@@ -983,7 +985,7 @@ function normalizeSelectedProcessMatches(
       paidAmount,
       upcomingAmount,
       hasManualAmounts,
-      hasManualAdjustment: hasManualAmounts || totalAmount !== null || amount !== null || Boolean(dueDate || description),
+      hasManualAdjustment,
     }
   }
 
@@ -2712,21 +2714,22 @@ async function runAutomation(req: Request): Promise<AutomationResult> {
           getCell(workingRow.values, 5),
           allowFallbackSelections,
         )
+        const manualOnlySelection = Boolean(selectedMatch?.hasManualAdjustment && !selectedMatch.selectionId)
 
-        if (preparedSourceSelection.pendingSelection) {
+        if (preparedSourceSelection.pendingSelection && !manualOnlySelection) {
           pendingSelections.push(preparedSourceSelection.pendingSelection)
           continue
         }
 
         const sourceEntry = preparedSourceSelection.sourceEntry
         const sourceCandidates = resolveSourceCandidatesForClient(valueAmountLookup, workingRow.normalizedName)
-        if (!sourceEntry && sourceCandidates.length > 1) {
+        if (!sourceEntry && sourceCandidates.length > 1 && !manualOnlySelection) {
           pendingSelections.push(
             buildPendingProcessSelection(pdfRecord, sourceCandidates, getCell(workingRow.values, 5)),
           )
           continue
         }
-        if (!sourceEntry) {
+        if (!sourceEntry && !manualOnlySelection) {
           notFound += 1
           errors += 1
           logEntries.push({
@@ -2750,11 +2753,7 @@ async function runAutomation(req: Request): Promise<AutomationResult> {
         }
 
         const sourceCode = sourceEntry?.code || getCell(workingRow.values, 5)
-        const sourceDate = sourceEntry?.date || getCell(workingRow.values, 1)
-        if (isCreated) {
-          workingRow.rowNumber = reserveCreatedRow(sourceDate)
-          workingRow.values[SHEET_CLIENT_COLUMN_INDEX - 1] = pdfRecord.name
-        }
+        const baseSourceDate = sourceEntry?.date || getCell(workingRow.values, 1)
         const sourceDueDay = sourceEntry?.dueDay || ''
         const sourceFinancialStatus = sourceEntry?.financialStatus || getCell(workingRow.values, 15)
         const totalAmount =
@@ -2765,7 +2764,12 @@ async function runAutomation(req: Request): Promise<AutomationResult> {
         const description = selectedMatch?.description || integra.description || String(pdfRecord.description || '').trim()
         const dueDate =
           selectedMatch?.dueDate ||
-          deriveDueDateFromContract(sourceDate, sourceDueDay, description, integra.dueDate || pdfRecord.dueDate || '')
+          deriveDueDateFromContract(baseSourceDate, sourceDueDay, description, integra.dueDate || pdfRecord.dueDate || '')
+        const sourceDate = baseSourceDate || dueDate || normalizeDate(pdfRecord.dueDate) || executionDate
+        if (isCreated) {
+          workingRow.rowNumber = reserveCreatedRow(sourceDate)
+          workingRow.values[SHEET_CLIENT_COLUMN_INDEX - 1] = pdfRecord.name
+        }
         const baseStatus = deriveFinancialStatus(
           integra.status,
           sourceFinancialStatus,
