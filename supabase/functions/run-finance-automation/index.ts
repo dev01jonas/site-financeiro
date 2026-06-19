@@ -768,6 +768,67 @@ function shiftA1Rows(range: string, startRow: number, delta: number) {
   })
 }
 
+function normalizeSheetRowLength(row: string[], width = TARGET_END_COLUMN_INDEX) {
+  const normalized = row.slice(0, width)
+  while (normalized.length < width) {
+    normalized.push('')
+  }
+  return normalized
+}
+
+function isClientDataRow(row: string[]) {
+  const clientName = getCell(row, SHEET_CLIENT_COLUMN_INDEX)
+  if (!clientName) return false
+  return !row.some((cell) => isMonthSeparator(String(cell || '').trim()))
+}
+
+function buildSortedMonthlySheetLayout(values: SheetValues, width = TARGET_END_COLUMN_INDEX) {
+  const lastFilledRow = findLastFilledRow(values)
+  const dataRows = values
+    .slice(1, lastFilledRow)
+    .map((row, index) => ({
+      originalRowNumber: index + 2,
+      row: normalizeSheetRowLength(row || [], width),
+      date: parseBrDate(getCell(row || [], 1)),
+    }))
+    .filter((item) => isClientDataRow(item.row))
+
+  dataRows.sort((left, right) => {
+    const leftTime = left.date?.getTime() ?? Number.MAX_SAFE_INTEGER
+    const rightTime = right.date?.getTime() ?? Number.MAX_SAFE_INTEGER
+    return leftTime - rightTime || left.originalRowNumber - right.originalRowNumber
+  })
+
+  const sortedRows: SheetValues = []
+  const separatorRows: number[] = []
+  const rowNumberByOriginalRow = new Map<number, number>()
+  let currentMonth = ''
+
+  for (const item of dataRows) {
+    const monthName = resolveMonthName(getCell(item.row, 1))
+    if (monthName && monthName !== currentMonth) {
+      sortedRows.push(createMonthSeparatorRow(monthName, width))
+      separatorRows.push(sortedRows.length + 1)
+      currentMonth = monthName
+    }
+
+    sortedRows.push(item.row)
+    rowNumberByOriginalRow.set(item.originalRowNumber, sortedRows.length + 1)
+  }
+
+  const writableRowCount = Math.max(lastFilledRow - 1, sortedRows.length)
+  while (sortedRows.length < writableRowCount) {
+    sortedRows.push(Array.from({ length: width }, () => ''))
+  }
+
+  return {
+    values: sortedRows,
+    separatorRows,
+    rowNumberByOriginalRow,
+    lastRowNumber: writableRowCount + 1,
+  }
+}
+
 type SheetAmountEntry = {
   selectionId: string
   rowNumber: number
@@ -1537,6 +1598,62 @@ class GoogleSheetsService {
             fields: 'userEnteredFormat(backgroundColor,horizontalAlignment,textFormat.bold)',
           },
         })),
+      }),
+    })
+  }
+
+  async formatMonthlyLayoutRows(sheetName: string, lastRowNumber: number, separatorRows: number[]) {
+    if (lastRowNumber < 2) return
+
+    const { sheetId } = await this.getSheetProperties(sheetName)
+    await this.request(':batchUpdate', {
+      method: 'POST',
+      body: JSON.stringify({
+        requests: [
+          {
+            repeatCell: {
+              range: {
+                sheetId,
+                startRowIndex: 1,
+                endRowIndex: lastRowNumber,
+                startColumnIndex: TARGET_START_COLUMN_INDEX - 1,
+                endColumnIndex: TARGET_END_COLUMN_INDEX,
+              },
+              cell: {
+                userEnteredFormat: {
+                  backgroundColor: hexToGoogleColor('#ffffff'),
+                  textFormat: {
+                    bold: false,
+                  },
+                },
+              },
+              fields: 'userEnteredFormat(backgroundColor,textFormat.bold)',
+            },
+          },
+          ...[...new Set(separatorRows)]
+            .filter((rowNumber) => rowNumber >= 2)
+            .map((rowNumber) => ({
+              repeatCell: {
+                range: {
+                  sheetId,
+                  startRowIndex: rowNumber - 1,
+                  endRowIndex: rowNumber,
+                  startColumnIndex: TARGET_START_COLUMN_INDEX - 1,
+                  endColumnIndex: TARGET_END_COLUMN_INDEX,
+                },
+                cell: {
+                  userEnteredFormat: {
+                    backgroundColor: hexToGoogleColor('#cfe2f3'),
+                    horizontalAlignment: 'CENTER',
+                    textFormat: {
+                      bold: true,
+                    },
+                  },
+                },
+                fields: 'userEnteredFormat(backgroundColor,horizontalAlignment,textFormat.bold)',
+              },
+            })),
+        ],
       }),
     })
   }
@@ -2911,7 +3028,22 @@ async function runAutomation(req: Request): Promise<AutomationResult> {
         await sheets.insertRows(sheetName, rowInsertions)
         await sheets.ensureDropdownFormatting(sheetName, targetColumns, maxRequestedRow)
         await sheets.batchUpdateValues(updateRequests)
-        await sheets.formatMonthSeparatorRows(sheetName, monthSeparatorRows)
+        const sortedLayout = buildSortedMonthlySheetLayout(
+          await sheets.readSheetValues(sheetName),
+          Math.max(sheetHeaders.length, TARGET_END_COLUMN_INDEX),
+        )
+        await sheets.ensureRowCapacity(sheetName, sortedLayout.lastRowNumber)
+        await sheets.updateValues(
+          `${quoteSheetName(sheetName)}!A2:${columnLetter(TARGET_END_COLUMN_INDEX)}${sortedLayout.lastRowNumber}`,
+          sortedLayout.values,
+        )
+        await sheets.formatMonthlyLayoutRows(sheetName, sortedLayout.lastRowNumber, sortedLayout.separatorRows)
+
+        for (const entry of logEntries) {
+          if (entry.rowNumber && sortedLayout.rowNumberByOriginalRow.has(entry.rowNumber)) {
+            entry.rowNumber = sortedLayout.rowNumberByOriginalRow.get(entry.rowNumber) || entry.rowNumber
+          }
+        }
       } catch (error) {
         updateFailureMessage = `Falha ao atualizar Google Sheets: ${error instanceof Error ? error.message : 'erro desconhecido'}`
         errors += 1
