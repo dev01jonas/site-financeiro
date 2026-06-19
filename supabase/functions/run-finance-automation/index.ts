@@ -49,6 +49,23 @@ const REGUA_MATCHERS: Array<{ value: string; terms: string[] }> = [
   { value: 'Pago', terms: ['pago', 'quitado'] },
   { value: 'Renegociado', terms: ['renegociado', 'renegociacao'] },
 ]
+const STATUS_OPTIONS = ['ATIVO', 'INATIVO', '-']
+const STATUS_COLORS = [
+  { value: 'ATIVO', background: '#d9ead3', foreground: '#188038' },
+  { value: 'INATIVO', background: '#f4cccc', foreground: '#cc0000' },
+  { value: '-', background: '#cfe2f3', foreground: '#3d85c6' },
+]
+const REGUA_COLORS = [
+  { value: 'Aviso de Inadimplência', background: '#cfe2f3', foreground: '#1155cc' },
+  { value: 'Lembrete de Atraso', background: '#ead1f2', foreground: '#674ea7' },
+  { value: 'Negociação', background: '#d9ead3', foreground: '#188038' },
+  { value: 'Rescisão', background: '#d9d9d9', foreground: '#666666' },
+  { value: 'Notificação', background: '#f4cccc', foreground: '#cc0000' },
+  { value: 'PENDENTE', background: '#cc0000', foreground: '#ffffff', bold: true },
+  { value: 'Execução', background: '#76a5af', foreground: '#073763' },
+  { value: 'Pago', background: '#0b8043', foreground: '#ffffff', bold: true },
+  { value: 'Renegociado', background: '#ffe599', foreground: '#7f6000' },
+]
 
 type SheetValues = string[][]
 type AutomationBody = {
@@ -86,6 +103,7 @@ type SelectedProcessMatch = {
   paidAmount: number | null
   upcomingAmount: number | null
   hasManualAmounts: boolean
+  hasManualAdjustment: boolean
 }
 
 type PdfRecord = {
@@ -413,6 +431,56 @@ function columnLetter(indexOneBased: number) {
     index = Math.floor((index - 1) / 26)
   }
   return letter
+}
+
+function hexToGoogleColor(hex: string) {
+  const normalized = hex.replace('#', '')
+  const value = Number.parseInt(normalized, 16)
+  if (!Number.isFinite(value)) return { red: 1, green: 1, blue: 1 }
+
+  return {
+    red: ((value >> 16) & 255) / 255,
+    green: ((value >> 8) & 255) / 255,
+    blue: (value & 255) / 255,
+  }
+}
+
+function buildTextEqualsFormatRule(
+  sheetId: number,
+  columnIndexOneBased: number,
+  value: string,
+  background: string,
+  foreground: string,
+  bold = false,
+) {
+  return {
+    addConditionalFormatRule: {
+      rule: {
+        ranges: [
+          {
+            sheetId,
+            startRowIndex: 1,
+            startColumnIndex: columnIndexOneBased - 1,
+            endColumnIndex: columnIndexOneBased,
+          },
+        ],
+        booleanRule: {
+          condition: {
+            type: 'TEXT_EQ',
+            values: [{ userEnteredValue: value }],
+          },
+          format: {
+            backgroundColor: hexToGoogleColor(background),
+            textFormat: {
+              foregroundColor: hexToGoogleColor(foreground),
+              bold,
+            },
+          },
+        },
+      },
+      index: 0,
+    },
+  }
 }
 
 function getCell(row: string[], columnIndexOneBased: number) {
@@ -805,6 +873,7 @@ function normalizeSelectedProcessMatches(
         paidAmount: null,
         upcomingAmount: null,
         hasManualAmounts: false,
+        hasManualAdjustment: false,
       }
     }
 
@@ -815,17 +884,23 @@ function normalizeSelectedProcessMatches(
     const openAmount = parseOptionalAmount(input.openAmount)
     const paidAmount = parseOptionalAmount(input.paidAmount)
     const upcomingAmount = parseOptionalAmount(input.upcomingAmount)
+    const totalAmount = parseOptionalAmount(input.totalAmount)
+    const amount = parseOptionalAmount(input.amount)
+    const dueDate = normalizeDate(input.dueDate)
+    const description = typeof input.description === 'string' ? input.description.trim() : ''
+    const hasManualAmounts = openAmount !== null || paidAmount !== null || upcomingAmount !== null
 
     return {
       selectionId,
-      totalAmount: parseOptionalAmount(input.totalAmount),
-      amount: parseOptionalAmount(input.amount),
-      dueDate: normalizeDate(input.dueDate),
-      description: typeof input.description === 'string' ? input.description.trim() : '',
+      totalAmount,
+      amount,
+      dueDate,
+      description,
       openAmount,
       paidAmount,
       upcomingAmount,
-      hasManualAmounts: openAmount !== null || paidAmount !== null || upcomingAmount !== null,
+      hasManualAmounts,
+      hasManualAdjustment: hasManualAmounts || totalAmount !== null || amount !== null || Boolean(dueDate || description),
     }
   }
 
@@ -1235,6 +1310,110 @@ class GoogleSheetsService {
           },
         ],
       }),
+    })
+  }
+
+  async ensureDropdownFormatting(sheetName: string, columns: TargetColumn[], minRowCount: number) {
+    const statusColumn = columns.find((column) => column.role === 'recordStatus')
+    const stageColumn = columns.find((column) => column.role === 'stageName')
+    if (!statusColumn && !stageColumn) return
+
+    const metadata = await this.request('?fields=sheets(properties(sheetId,title),conditionalFormats)')
+    const sheet = (metadata.sheets || []).find(
+      (item: { properties?: { title?: string } }) => item.properties?.title === sheetName,
+    )
+    const sheetId = sheet?.properties?.sheetId
+    if (sheetId === undefined) return
+
+    const targetColumnIndexes = new Set(
+      [statusColumn?.index, stageColumn?.index].filter((index): index is number => Boolean(index)),
+    )
+    const targetValues = new Set([...STATUS_OPTIONS, ...REGUA_OPTIONS])
+    const existingFormatRules = (sheet.conditionalFormats || []) as Array<{
+      ranges?: Array<{ startColumnIndex?: number; endColumnIndex?: number }>
+      booleanRule?: { condition?: { type?: string; values?: Array<{ userEnteredValue?: string }> } }
+    }>
+
+    const requests: Array<Record<string, unknown>> = existingFormatRules
+      .map((rule, index) => ({ rule, index }))
+      .filter(({ rule }) => {
+        const condition = rule.booleanRule?.condition
+        if (condition?.type !== 'TEXT_EQ') return false
+        const value = condition.values?.[0]?.userEnteredValue || ''
+        if (!targetValues.has(value)) return false
+
+        return (rule.ranges || []).some((range) => {
+          const startColumn = Number(range.startColumnIndex || 0) + 1
+          const endColumn = Number(range.endColumnIndex || startColumn)
+          return [...targetColumnIndexes].some((columnIndex) => columnIndex >= startColumn && columnIndex < endColumn)
+        })
+      })
+      .sort((left, right) => right.index - left.index)
+      .map(({ index }) => ({ deleteConditionalFormatRule: { sheetId, index } }))
+
+    const endRowIndex = Math.max(minRowCount, 2)
+    const addValidationRequest = (columnIndex: number, options: string[]) => {
+      requests.push({
+        repeatCell: {
+          range: {
+            sheetId,
+            startRowIndex: 1,
+            endRowIndex,
+            startColumnIndex: columnIndex - 1,
+            endColumnIndex: columnIndex,
+          },
+          cell: {
+            dataValidation: {
+              condition: {
+                type: 'ONE_OF_LIST',
+                values: options.map((option) => ({ userEnteredValue: option })),
+              },
+              strict: false,
+              showCustomUi: true,
+            },
+          },
+          fields: 'dataValidation',
+        },
+      })
+    }
+
+    if (statusColumn) {
+      addValidationRequest(statusColumn.index, STATUS_OPTIONS)
+      for (const color of STATUS_COLORS) {
+        requests.push(
+          buildTextEqualsFormatRule(
+            sheetId,
+            statusColumn.index,
+            color.value,
+            color.background,
+            color.foreground,
+            color.bold,
+          ),
+        )
+      }
+    }
+
+    if (stageColumn) {
+      addValidationRequest(stageColumn.index, REGUA_OPTIONS)
+      for (const color of REGUA_COLORS) {
+        requests.push(
+          buildTextEqualsFormatRule(
+            sheetId,
+            stageColumn.index,
+            color.value,
+            color.background,
+            color.foreground,
+            color.bold,
+          ),
+        )
+      }
+    }
+
+    if (requests.length === 0) return
+
+    await this.request(':batchUpdate', {
+      method: 'POST',
+      body: JSON.stringify({ requests }),
     })
   }
 
@@ -1794,6 +1973,19 @@ function deriveRecordStatus(trello: TrelloLookupResult) {
   return trello.statusLabel || 'ATIVO'
 }
 
+function deriveTrelloForUpdate(trello: TrelloLookupResult, selectedMatch: SelectedProcessMatch | undefined) {
+  if (!selectedMatch?.hasManualAdjustment) return trello
+
+  return {
+    ...trello,
+    found: true,
+    situation: 'Renegociado',
+    resultLabel: trello.resultLabel
+      ? `${trello.resultLabel} | Régua manual: Renegociado`
+      : 'Régua manual: Renegociado',
+  }
+}
+
 function computeColumnValue(
   column: TargetColumn,
   timestamp: string,
@@ -2349,6 +2541,7 @@ async function runAutomation(req: Request): Promise<AutomationResult> {
           amounts.paidAmount,
           amounts.upcomingAmount,
         )
+        const updateTrello = deriveTrelloForUpdate(trello, selectedMatch)
         const updatePlan = buildUpdatePlan(
           workingRow,
           targetColumns,
@@ -2366,7 +2559,7 @@ async function runAutomation(req: Request): Promise<AutomationResult> {
           amounts.openAmount,
           amounts.paidAmount,
           amounts.upcomingAmount,
-          trello,
+          updateTrello,
         )
 
         if (isCreated) {
@@ -2395,8 +2588,8 @@ async function runAutomation(req: Request): Promise<AutomationResult> {
         if (isCreated || updatePlan.action === 'atualizado' || updatePlan.action === 'data_atualizada') {
           registerDashboardMetrics({
             action: isCreated ? 'cliente_adicionado' : updatePlan.action,
-            trelloStage: resolveStageForMetrics(workingRow, targetColumns, trello),
-            recordStatus: deriveRecordStatus(trello),
+            trelloStage: resolveStageForMetrics(workingRow, targetColumns, updateTrello),
+            recordStatus: deriveRecordStatus(updateTrello),
             openAmount: amounts.openAmount,
             paidAmount: amounts.paidAmount,
             upcomingAmount: amounts.upcomingAmount,
@@ -2432,7 +2625,7 @@ async function runAutomation(req: Request): Promise<AutomationResult> {
                 ? 'Sem mudança de conteúdo; apenas data da atualização foi renovada.'
                 : null,
               body.pdfFileName ? `Excel: ${body.pdfFileName}` : null,
-              trello.resultLabel ? `Trello: ${trello.resultLabel}` : null,
+              updateTrello.resultLabel ? `Trello: ${updateTrello.resultLabel}` : null,
               dueDate ? `Vencimento: ${dueDate}` : null,
             ]
               .filter(Boolean)
@@ -2467,6 +2660,7 @@ async function runAutomation(req: Request): Promise<AutomationResult> {
     if (!dryRun && updateRequests.length > 0) {
       try {
         await sheets.ensureRowCapacity(sheetName, maxRequestedRow)
+        await sheets.ensureDropdownFormatting(sheetName, targetColumns, maxRequestedRow)
         await sheets.batchUpdateValues(updateRequests)
       } catch (error) {
         updateFailureMessage = `Falha ao atualizar Google Sheets: ${error instanceof Error ? error.message : 'erro desconhecido'}`
@@ -2652,6 +2846,7 @@ async function runAutomation(req: Request): Promise<AutomationResult> {
       amounts.paidAmount,
       amounts.upcomingAmount,
     )
+    const updateTrello = deriveTrelloForUpdate(trello, selectedMatch)
     const updatePlan = buildUpdatePlan(
       row,
       targetColumns,
@@ -2669,7 +2864,7 @@ async function runAutomation(req: Request): Promise<AutomationResult> {
       amounts.openAmount,
       amounts.paidAmount,
       amounts.upcomingAmount,
-      trello,
+      updateTrello,
     )
 
     if (options.created) {
@@ -2725,7 +2920,7 @@ async function runAutomation(req: Request): Promise<AutomationResult> {
             ? 'Sem mudança de conteúdo; apenas data da atualização foi renovada.'
             : null,
           body.pdfFileName ? `Excel: ${body.pdfFileName}` : null,
-          trello.resultLabel ? `Trello: ${trello.resultLabel}` : null,
+          updateTrello.resultLabel ? `Trello: ${updateTrello.resultLabel}` : null,
           dueDate ? `Vencimento: ${dueDate}` : null,
         ]
           .filter(Boolean)
@@ -2951,6 +3146,7 @@ async function runAutomation(req: Request): Promise<AutomationResult> {
   let updateFailureMessage = ''
   if (!dryRun && updateRequests.length > 0) {
     try {
+      await sheets.ensureDropdownFormatting(sheetName, targetColumns, Math.max(values.length, nextRowNumber))
       await sheets.batchUpdateValues(updateRequests)
     } catch (error) {
       updateFailureMessage = `Falha ao atualizar Google Sheets: ${error instanceof Error ? error.message : 'erro desconhecido'}`
