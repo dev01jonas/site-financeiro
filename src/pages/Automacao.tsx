@@ -1127,7 +1127,7 @@ export default function Automacao() {
                     <div className="mb-3">
                       <p className="text-sm font-semibold">Ajuste manual desta cobrança</p>
                       <p className="text-xs text-muted-foreground">
-                        Use só quando o Excel trouxer combo, valor somado ou vencimento diferente. Campos vazios mantêm o cálculo automático.
+                        Use só quando o Excel trouxer combo, valor somado ou vencimento diferente. Se a descrição for Entrada, a régua continua vindo do Trello; outros ajustes manuais entram como Renegociado.
                       </p>
                     </div>
                     <div className="grid gap-3 md:grid-cols-3">

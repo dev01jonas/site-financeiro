@@ -2117,8 +2117,14 @@ function deriveRecordStatus(trello: TrelloLookupResult) {
   return trello.statusLabel || 'ATIVO'
 }
 
+function isEntryManualAdjustment(selectedMatch: SelectedProcessMatch | undefined) {
+  const description = normalizeHeader(selectedMatch?.description || '')
+  return description === 'ENTRADA' || description.startsWith('ENTRADA_')
+}
+
 function deriveTrelloForUpdate(trello: TrelloLookupResult, selectedMatch: SelectedProcessMatch | undefined) {
   if (!selectedMatch?.hasManualAdjustment) return trello
+  if (isEntryManualAdjustment(selectedMatch)) return trello
 
   return {
     ...trello,
