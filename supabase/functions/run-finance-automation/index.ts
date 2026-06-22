@@ -111,6 +111,8 @@ type PdfRecord = {
   dueDate?: string
   amount?: number
   description?: string
+  status?: string
+  financialStatus?: string
   email?: string
 }
 
@@ -1284,6 +1286,34 @@ function getSelectableProcessCandidates(candidates: SheetAmountEntry[]) {
   return selectable.length > 0 ? selectable : candidates
 }
 
+function isClosedOrPaidRecord(record: PreparedPdfRecord) {
+  return isClosedOrPaidProcess(record.status, record.financialStatus)
+}
+
+function findStrictProcessCandidate(
+  candidates: SheetAmountEntry[],
+  pdfRecord: PreparedPdfRecord,
+  currentCode: string,
+) {
+  if (currentCode) {
+    const codeMatches = candidates.filter(
+      (candidate) => candidate.code && normalizeHeader(candidate.code) === normalizeHeader(currentCode),
+    )
+    if (codeMatches.length === 1) return codeMatches[0]
+  }
+
+  const amountMatches = candidates.filter((candidate) => amountsMatch(candidate.amount, pdfRecord.amount))
+  if (amountMatches.length === 1) return amountMatches[0]
+
+  const dueDate = parseBrDate(pdfRecord.dueDate || '')
+  if (dueDate && amountMatches.length > 1) {
+    const dueDayMatches = amountMatches.filter((candidate) => Number(candidate.dueDay) === dueDate.getDate())
+    if (dueDayMatches.length === 1) return dueDayMatches[0]
+  }
+
+  return null
+}
+
 function scoreProcessOption(
   option: ProcessOption,
   pdfRecord: PreparedPdfRecord,
@@ -1381,6 +1411,9 @@ function resolveSelectedSourceCandidate(
     return selectableCandidates.find((candidate) => candidate.selectionId === selectedSelectionId) || null
   }
   if (selectableCandidates.length === 1 && candidates.length === 1) return selectableCandidates[0]
+  if (isClosedOrPaidRecord(pdfRecord)) {
+    return findStrictProcessCandidate(candidates, pdfRecord, currentCode)
+  }
 
   if (currentCode) {
     const codeMatches = selectableCandidates.filter(
@@ -3062,6 +3095,24 @@ async function runAutomation(req: Request): Promise<AutomationResult> {
 
         const sourceEntry = preparedSourceSelection.sourceEntry
         const sourceCandidates = resolveSourceCandidatesForClient(valueAmountLookup, workingRow.normalizedName)
+        if (!sourceEntry && sourceCandidates.length > 1 && isClosedOrPaidRecord(pdfRecord) && !manualOnlySelection) {
+          ignored += 1
+          logEntries.push({
+            timestamp,
+            rowNumber: shiftedMatchedRow?.rowNumber ?? null,
+            clientName: workingRow.clientName,
+            status: 'quitado_historico_ignorado',
+            action: 'ignorado',
+            sources: ['Excel'],
+            errorMessage: '',
+            details: [
+              body.pdfFileName ? `Excel: ${body.pdfFileName}` : null,
+              'Cobrança histórica já paga/quitada e sem correspondência única na Prospecção (PRD).',
+            ].filter(Boolean).join(' | '),
+            cardUrl: '',
+          })
+          continue
+        }
         if (!sourceEntry && sourceCandidates.length > 1 && !manualOnlySelection) {
           pendingSelections.push(
             buildPendingProcessSelection(pdfRecord, sourceCandidates, getCell(workingRow.values, 5)),
@@ -3427,6 +3478,24 @@ async function runAutomation(req: Request): Promise<AutomationResult> {
     }
     const sourceEntry = preparedSourceSelection.sourceEntry
     const sourceCandidates = resolveSourceCandidatesForClient(valueAmountLookup, row.normalizedName)
+    if (!sourceEntry && sourceCandidates.length > 1 && isClosedOrPaidRecord(pdfRecord)) {
+      ignored += 1
+      logEntries.push({
+        timestamp,
+        rowNumber: row.rowNumber,
+        clientName: row.clientName,
+        status: 'quitado_historico_ignorado',
+        action: 'ignorado',
+        sources: ['Excel'],
+        errorMessage: '',
+        details: [
+          body.pdfFileName ? `Excel: ${body.pdfFileName}` : null,
+          'Cobrança histórica já paga/quitada e sem correspondência única na Prospecção (PRD).',
+        ].filter(Boolean).join(' | '),
+        cardUrl: '',
+      })
+      return
+    }
     if (!sourceEntry && sourceCandidates.length > 1) {
       pendingSelections.push(buildPendingProcessSelection(pdfRecord, sourceCandidates, getCell(row.values, 5)))
       return
@@ -3614,6 +3683,24 @@ async function runAutomation(req: Request): Promise<AutomationResult> {
     }
     const sourceEntry = preparedSourceSelection.sourceEntry
     const sourceCandidates = resolveSourceCandidatesForClient(valueAmountLookup, row.normalizedName)
+    if (!sourceEntry && sourceCandidates.length > 1 && isClosedOrPaidRecord(pdfRecord)) {
+      ignored += 1
+      logEntries.push({
+        timestamp,
+        rowNumber: row.rowNumber,
+        clientName: row.clientName,
+        status: 'quitado_historico_ignorado',
+        action: 'ignorado',
+        sources: ['Excel'],
+        errorMessage: '',
+        details: [
+          body.pdfFileName ? `Excel: ${body.pdfFileName}` : null,
+          'Cobrança histórica já paga/quitada e sem correspondência única na Prospecção (PRD).',
+        ].filter(Boolean).join(' | '),
+        cardUrl: '',
+      })
+      continue
+    }
     if (!sourceEntry && sourceCandidates.length > 1) {
       pendingSelections.push(buildPendingProcessSelection(pdfRecord, sourceCandidates, getCell(row.values, 5)))
       continue

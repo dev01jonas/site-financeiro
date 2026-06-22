@@ -9,6 +9,8 @@ export interface ExtractedRecord {
   amount: number;
   email?: string;
   description?: string;
+  status?: string;
+  financialStatus?: string;
 }
 
 function decodeHtmlEntities(value: string) {
@@ -277,9 +279,11 @@ function mapRowsToBillingRecords(rows: unknown[][]): ExtractedRecord[] {
       const dueDateIndex = findColumnIndex(headers, ['vencimento', 'data vencimento', 'dt vencimento', 'venc.', 'dt venc']);
       const amountIndex = findColumnIndex(headers, ['valor', 'vlr', 'total', 'saldo', 'parcela', 'honorario', 'honorarios']);
       const descriptionIndex = findColumnIndex(headers, ['descricao', 'descrição', 'detalhe', 'parcela', 'observacao', 'observação']);
+      const statusIndex = findColumnIndex(headers, ['status', 'situacao']);
+      const financialStatusIndex = findColumnIndex(headers, ['financeiro', 'status financeiro', 'situacao financeira']);
       const emailIndex = findColumnIndex(headers, ['email', 'e-mail', 'mail', 'correio']);
       const score = [nameIndex, dueDateIndex, amountIndex].filter((index) => index !== -1).length;
-      return { rowIndex, nameIndex, dueDateIndex, amountIndex, descriptionIndex, emailIndex, score };
+      return { rowIndex, nameIndex, dueDateIndex, amountIndex, descriptionIndex, statusIndex, financialStatusIndex, emailIndex, score };
     })
     .filter((candidate) => candidate.score >= 2)
     .sort((a, b) => b.score - a.score || a.rowIndex - b.rowIndex);
@@ -301,8 +305,19 @@ function mapRowsToBillingRecords(rows: unknown[][]): ExtractedRecord[] {
       const amountCell = normalizeCell(columns[header.amountIndex]);
       const amount = typeof amountCell === 'number' ? amountCell : parseAmount(String(amountCell || ''));
       const description = header.descriptionIndex >= 0 ? String(normalizeCell(columns[header.descriptionIndex]) || '') : '';
+      const status = header.statusIndex >= 0 ? String(normalizeCell(columns[header.statusIndex]) || '').trim() : '';
+      const financialStatus =
+        header.financialStatusIndex >= 0 ? String(normalizeCell(columns[header.financialStatusIndex]) || '').trim() : '';
       const email = header.emailIndex >= 0 ? String(normalizeCell(columns[header.emailIndex]) || '').trim().toLowerCase() : '';
-      return { name, dueDate, amount, description: description || undefined, email: isValidEmail(email) ? email : undefined };
+      return {
+        name,
+        dueDate,
+        amount,
+        description: description || undefined,
+        status: status || undefined,
+        financialStatus: financialStatus || undefined,
+        email: isValidEmail(email) ? email : undefined,
+      };
     })
     .filter((record) => record.name.length > 3 && /^\d{2}\/\d{2}\/\d{4}$/.test(record.dueDate) && record.amount > 0);
 }
