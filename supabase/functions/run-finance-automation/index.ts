@@ -783,9 +783,101 @@ function isClientDataRow(row: string[]) {
   return !row.some((cell) => isMonthSeparator(String(cell || '').trim()))
 }
 
+function nonEmptyCellCount(row: string[]) {
+  return row.filter((cell) => String(cell || '').trim()).length
+}
+
+function getDeduplicationKey(row: string[]) {
+  const normalizedName = normalizeClientName(getCell(row, SHEET_CLIENT_COLUMN_INDEX))
+  if (!normalizedName) return ''
+
+  const totalAmount = parseAmount(getCell(row, SHEET_TOTAL_VALUE_COLUMN_INDEX))
+  if (totalAmount === null || totalAmount <= 0) return ''
+
+  const amountKey = amountPairKey(totalAmount)
+  return `${normalizedName}__${amountKey}`
+}
+
+function canMergeDuplicateClientRows(rows: string[][]) {
+  const sourceCodes = new Set(rows.map((row) => normalizeHeader(getCell(row, 5))).filter(Boolean))
+  return sourceCodes.size <= 1
+}
+
+function choosePreferredDuplicateRow(rows: string[][]) {
+  return rows
+    .map((row) => ({
+      row,
+      openAmount: parseAmount(getCell(row, 21)) || 0,
+      paidAmount: parseAmount(getCell(row, 22)) || 0,
+      upcomingAmount: parseAmount(getCell(row, 23)) || 0,
+      date: parseBrDate(getCell(row, 1)),
+      filled: nonEmptyCellCount(row),
+    }))
+    .sort((left, right) => {
+      const leftHasCode = getCell(left.row, 5) ? 1 : 0
+      const rightHasCode = getCell(right.row, 5) ? 1 : 0
+      const leftOpen = left.openAmount > 0 ? 1 : 0
+      const rightOpen = right.openAmount > 0 ? 1 : 0
+
+      return (
+        rightHasCode - leftHasCode ||
+        rightOpen - leftOpen ||
+        right.paidAmount - left.paidAmount ||
+        right.openAmount - left.openAmount ||
+        right.upcomingAmount - left.upcomingAmount ||
+        right.filled - left.filled ||
+        (left.date?.getTime() ?? Number.MAX_SAFE_INTEGER) - (right.date?.getTime() ?? Number.MAX_SAFE_INTEGER)
+      )
+    })[0]?.row || rows[0]
+}
+
+function mergeDuplicateClientRows(rows: string[][]) {
+  const merged = [...choosePreferredDuplicateRow(rows)]
+  const dates = rows.map((row) => parseBrDate(getCell(row, 1))).filter((date): date is Date => Boolean(date))
+  const earliestDate = dates.sort((left, right) => left.getTime() - right.getTime())[0]
+  if (earliestDate) {
+    merged[0] = formatBrDate(earliestDate)
+  }
+
+  for (let index = 0; index < merged.length; index += 1) {
+    if (String(merged[index] || '').trim()) continue
+
+    const fallbackValue = rows
+      .map((row) => getCell(row, index + 1))
+      .find((value) => String(value || '').trim())
+    if (fallbackValue) {
+      merged[index] = fallbackValue
+    }
+  }
+
+  const totalAmount = rows
+    .map((row) => parseAmount(getCell(row, SHEET_TOTAL_VALUE_COLUMN_INDEX)))
+    .find((amount): amount is number => amount !== null && amount > 0) ?? null
+  const openAmount = Math.max(...rows.map((row) => parseAmount(getCell(row, 21)) || 0))
+  const paidAmount = Math.max(...rows.map((row) => parseAmount(getCell(row, 22)) || 0))
+  const upcomingAmount = totalAmount !== null ? Math.max(totalAmount - openAmount - paidAmount, 0) : Math.max(...rows.map((row) => parseAmount(getCell(row, 23)) || 0))
+  const dueDateRow = rows
+    .map((row) => ({
+      row,
+      openAmount: parseAmount(getCell(row, 21)) || 0,
+      overdueDays: Number(getCell(row, 25)) || 0,
+    }))
+    .sort((left, right) => right.openAmount - left.openAmount || right.overdueDays - left.overdueDays)[0]?.row
+
+  if (totalAmount !== null) merged[SHEET_TOTAL_VALUE_COLUMN_INDEX - 1] = formatCurrency(totalAmount)
+  merged[14] = openAmount > 0 ? 'EM ATRASO' : upcomingAmount > 0 ? 'A VENCER' : paidAmount > 0 ? 'QUITADO' : ''
+  merged[17] = getCell(dueDateRow || merged, 18)
+  merged[20] = formatCurrency(openAmount)
+  merged[21] = formatCurrency(paidAmount)
+  merged[22] = formatCurrency(upcomingAmount)
+  merged[24] = getCell(dueDateRow || merged, 25)
+
+  return merged
+}
+
 function buildSortedMonthlySheetLayout(values: SheetValues, width = TARGET_END_COLUMN_INDEX) {
   const lastFilledRow = findLastFilledRow(values)
-  const dataRows = values
+  const rawDataRows = values
     .slice(1, lastFilledRow)
     .map((row, index) => ({
       originalRowNumber: index + 2,
@@ -794,6 +886,36 @@ function buildSortedMonthlySheetLayout(values: SheetValues, width = TARGET_END_C
     }))
     .filter((item) => isClientDataRow(item.row))
 
+  const deduplicationBuckets = new Map<string, typeof rawDataRows>()
+  const uniqueDataRows: typeof rawDataRows = []
+  for (const item of rawDataRows) {
+    const key = getDeduplicationKey(item.row)
+    if (!key) {
+      uniqueDataRows.push(item)
+      continue
+    }
+
+    const bucket = deduplicationBuckets.get(key) || []
+    bucket.push(item)
+    deduplicationBuckets.set(key, bucket)
+  }
+
+  for (const bucket of deduplicationBuckets.values()) {
+    if (bucket.length === 1 || !canMergeDuplicateClientRows(bucket.map((item) => item.row))) {
+      uniqueDataRows.push(...bucket)
+      continue
+    }
+
+    const mergedRow = mergeDuplicateClientRows(bucket.map((item) => item.row))
+    const earliestOriginalRowNumber = Math.min(...bucket.map((item) => item.originalRowNumber))
+    uniqueDataRows.push({
+      originalRowNumber: earliestOriginalRowNumber,
+      row: normalizeSheetRowLength(mergedRow, width),
+      date: parseBrDate(getCell(mergedRow, 1)),
+    })
+  }
+
+  const dataRows = uniqueDataRows
   dataRows.sort((left, right) => {
     const leftTime = left.date?.getTime() ?? Number.MAX_SAFE_INTEGER
     const rightTime = right.date?.getTime() ?? Number.MAX_SAFE_INTEGER
