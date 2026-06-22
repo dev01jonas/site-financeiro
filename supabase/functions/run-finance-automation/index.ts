@@ -67,7 +67,8 @@ const REGUA_COLORS = [
   { value: 'Renegociado', background: '#ffe599', foreground: '#7f6000' },
 ]
 
-type SheetValues = string[][]
+type SheetCellValue = string | number | null
+type SheetValues = SheetCellValue[][]
 type AutomationBody = {
   dryRun?: boolean
   maxRows?: number
@@ -168,7 +169,7 @@ type SheetClientRow = {
   rowNumber: number
   clientName: string
   normalizedName: string
-  values: string[]
+  values: SheetCellValue[]
 }
 
 type ColumnRole =
@@ -486,7 +487,7 @@ function buildTextEqualsFormatRule(
   }
 }
 
-function getCell(row: string[], columnIndexOneBased: number) {
+function getCell(row: Array<unknown>, columnIndexOneBased: number) {
   return String(row[columnIndexOneBased - 1] || '').trim()
 }
 
@@ -508,6 +509,10 @@ function parseAmount(value: unknown) {
 function formatCurrency(value: number | null) {
   if (value === null || !Number.isFinite(value)) return ''
   return `R$ ${value.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+}
+
+function sheetNumber(value: number | null) {
+  return value !== null && Number.isFinite(value) ? value : ''
 }
 
 function normalizeDate(value: unknown) {
@@ -800,7 +805,7 @@ function getDeduplicationKey(row: string[]) {
   return `${normalizedName}__${amountKey}`
 }
 
-function canMergeDuplicateClientRows(rows: string[][]) {
+function canMergeDuplicateClientRows(rows: SheetCellValue[][]) {
   const sourceCodes = new Set(rows.map((row) => normalizeHeader(getCell(row, 5))).filter(Boolean))
   return sourceCodes.size <= 1
 }
@@ -833,7 +838,7 @@ function choosePreferredDuplicateRow(rows: string[][]) {
     })[0]?.row || rows[0]
 }
 
-function mergeDuplicateClientRows(rows: string[][]) {
+function mergeDuplicateClientRows(rows: SheetCellValue[][]) {
   const merged = [...choosePreferredDuplicateRow(rows)]
   const dates = rows.map((row) => parseBrDate(getCell(row, 1))).filter((date): date is Date => Boolean(date))
   const earliestDate = dates.sort((left, right) => left.getTime() - right.getTime())[0]
@@ -866,12 +871,12 @@ function mergeDuplicateClientRows(rows: string[][]) {
     }))
     .sort((left, right) => right.openAmount - left.openAmount || right.overdueDays - left.overdueDays)[0]?.row
 
-  if (totalAmount !== null) merged[SHEET_TOTAL_VALUE_COLUMN_INDEX - 1] = formatCurrency(totalAmount)
+  if (totalAmount !== null) merged[SHEET_TOTAL_VALUE_COLUMN_INDEX - 1] = sheetNumber(totalAmount)
   merged[14] = openAmount > 0 ? 'EM ATRASO' : upcomingAmount > 0 ? 'A VENCER' : paidAmount > 0 ? 'QUITADO' : ''
   merged[17] = getCell(dueDateRow || merged, 18)
-  merged[20] = formatCurrency(openAmount)
-  merged[21] = formatCurrency(paidAmount)
-  merged[22] = formatCurrency(upcomingAmount)
+  merged[20] = sheetNumber(openAmount)
+  merged[21] = sheetNumber(paidAmount)
+  merged[22] = sheetNumber(upcomingAmount)
   merged[24] = getCell(dueDateRow || merged, 25)
 
   return merged
@@ -2526,7 +2531,7 @@ function computeColumnValue(
     case 'dueDate':
       return dueDate
     case 'amount':
-      return formatCurrency(totalAmount)
+      return sheetNumber(totalAmount)
     case 'description':
       return description
     case 'financialStatus':
@@ -2534,11 +2539,11 @@ function computeColumnValue(
     case 'recordStatus':
       return deriveRecordStatus(trello)
     case 'openAmount':
-      return formatCurrency(openAmount)
+      return sheetNumber(openAmount)
     case 'paidAmount':
-      return formatCurrency(paidAmount)
+      return sheetNumber(paidAmount)
     case 'upcomingAmount':
-      return formatCurrency(upcomingAmount)
+      return sheetNumber(upcomingAmount)
     case 'daysOverdue': {
       const diffDays = dueDate ? diffDaysFromToday(dueDate) : null
       return diffDays && diffDays > 0 ? String(diffDays) : '0'
