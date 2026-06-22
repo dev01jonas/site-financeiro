@@ -1380,7 +1380,7 @@ function resolveSelectedSourceCandidate(
   if (selectedSelectionId) {
     return selectableCandidates.find((candidate) => candidate.selectionId === selectedSelectionId) || null
   }
-  if (selectableCandidates.length === 1) return selectableCandidates[0]
+  if (selectableCandidates.length === 1 && candidates.length === 1) return selectableCandidates[0]
 
   if (currentCode) {
     const codeMatches = selectableCandidates.filter(
