@@ -1225,6 +1225,12 @@ function amountPairKey(amount: number | null | undefined) {
   return typeof amount === 'number' && Number.isFinite(amount) ? String(Math.round(amount * 100)) : ''
 }
 
+function amountsMatch(left: number | null | undefined, right: number | null | undefined) {
+  const leftKey = amountPairKey(left)
+  const rightKey = amountPairKey(right)
+  return Boolean(leftKey && rightKey && leftKey === rightKey)
+}
+
 function isEntryDescription(description: string) {
   const normalized = normalizeHeader(description)
   return normalized === 'ENTRADA' || normalized.startsWith('ENTRADA_')
@@ -2304,16 +2310,24 @@ function deriveInstallmentAmounts(
 function deriveFinancialStatus(
   integraStatus: string,
   sourceFinancialStatus: string,
+  totalAmount: number | null,
   amount: number | null,
   openAmount: number | null,
   paidAmount: number | null,
   upcomingAmount: number | null,
 ) {
+  const isFullPayment =
+    amountsMatch(totalAmount, amount) ||
+    (totalAmount !== null && totalAmount > 0 && (paidAmount || 0) >= totalAmount && (openAmount || 0) <= 0 && (upcomingAmount || 0) <= 0)
   const normalizedIntegraStatus = normalizeStatus(integraStatus)
+  if (normalizedIntegraStatus === 'QUITADO') return isFullPayment ? 'QUITADO' : 'EM DIA'
   if (normalizedIntegraStatus) return normalizedIntegraStatus
   const normalizedSourceStatus = normalizeStatus(sourceFinancialStatus)
+  if (normalizedSourceStatus === 'QUITADO') return isFullPayment ? 'QUITADO' : 'EM DIA'
   if (normalizedSourceStatus) return normalizedSourceStatus
-  if ((paidAmount || 0) > 0 && (openAmount || 0) <= 0) return 'QUITADO'
+  if ((paidAmount || 0) > 0 && (openAmount || 0) <= 0) {
+    return totalAmount !== null && totalAmount > 0 ? (paidAmount >= totalAmount ? 'QUITADO' : 'EM DIA') : 'QUITADO'
+  }
   if ((upcomingAmount || 0) > 0) return 'A VENCER'
   if ((openAmount || 0) > 0) return 'EM ATRASO'
   return amount ? 'EM DIA' : ''
@@ -2334,7 +2348,32 @@ function deriveManualFinancialStatus(
 }
 
 function deriveEntryFinancialStatus(upcomingAmount: number | null) {
-  return (upcomingAmount || 0) > 0 ? 'A VENCER' : 'EM DIA'
+  return 'EM DIA'
+}
+
+function deriveFinalFinancialStatus(
+  baseStatus: string,
+  totalAmount: number | null,
+  amount: number | null,
+  openAmount: number | null,
+  paidAmount: number | null,
+  upcomingAmount: number | null,
+  description: string,
+) {
+  const open = openAmount || 0
+  const paid = paidAmount || 0
+  const upcoming = upcomingAmount || 0
+  const total = totalAmount || 0
+
+  if (isEntryDescription(description) && paid > 0) {
+    return deriveEntryFinancialStatus(upcomingAmount)
+  }
+
+  if (open > 0) return 'EM ATRASO'
+  if (total > 0 && (paid >= total || amountsMatch(totalAmount, amount))) return 'QUITADO'
+  if (upcoming > 0 || (total > 0 && paid > 0 && paid < total)) return 'EM DIA'
+  if (baseStatus === 'A VENCER') return 'EM DIA'
+  return baseStatus
 }
 
 function applyManualAmountOverrides(
@@ -3073,6 +3112,7 @@ async function runAutomation(req: Request): Promise<AutomationResult> {
         const baseStatus = deriveFinancialStatus(
           integra.status,
           sourceFinancialStatus,
+          totalAmount,
           amount,
           integra.openAmount,
           integra.paidAmount,
@@ -3082,16 +3122,21 @@ async function runAutomation(req: Request): Promise<AutomationResult> {
           deriveAmounts(totalAmount, baseStatus, amount, description, integra),
           selectedMatch,
         )
-        const status =
-          isEntryDescription(description) && (amounts.paidAmount || 0) > 0
-            ? deriveEntryFinancialStatus(amounts.upcomingAmount)
-            : deriveManualFinancialStatus(
-                baseStatus,
-                selectedMatch,
-                amounts.openAmount,
-                amounts.paidAmount,
-                amounts.upcomingAmount,
-              )
+        const status = deriveFinalFinancialStatus(
+          deriveManualFinancialStatus(
+            baseStatus,
+            selectedMatch,
+            amounts.openAmount,
+            amounts.paidAmount,
+            amounts.upcomingAmount,
+          ),
+          totalAmount,
+          amount,
+          amounts.openAmount,
+          amounts.paidAmount,
+          amounts.upcomingAmount,
+          description,
+        )
         const updateTrello = deriveTrelloForUpdate(trello, selectedMatch)
         const updatePlan = buildUpdatePlan(
           workingRow,
@@ -3423,22 +3468,28 @@ async function runAutomation(req: Request): Promise<AutomationResult> {
     const baseStatus = deriveFinancialStatus(
       integra.status,
       sourceFinancialStatus,
+      totalAmount,
       amount,
       integra.openAmount,
       integra.paidAmount,
       integra.upcomingAmount,
     )
     const amounts = applyManualAmountOverrides(deriveAmounts(totalAmount, baseStatus, amount, description, integra), selectedMatch)
-    const status =
-      isEntryDescription(description) && (amounts.paidAmount || 0) > 0
-        ? deriveEntryFinancialStatus(amounts.upcomingAmount)
-        : deriveManualFinancialStatus(
-            baseStatus,
-            selectedMatch,
-            amounts.openAmount,
-            amounts.paidAmount,
-            amounts.upcomingAmount,
-          )
+    const status = deriveFinalFinancialStatus(
+      deriveManualFinancialStatus(
+        baseStatus,
+        selectedMatch,
+        amounts.openAmount,
+        amounts.paidAmount,
+        amounts.upcomingAmount,
+      ),
+      totalAmount,
+      amount,
+      amounts.openAmount,
+      amounts.paidAmount,
+      amounts.upcomingAmount,
+      description,
+    )
     const updateTrello = deriveTrelloForUpdate(trello, selectedMatch)
     const updatePlan = buildUpdatePlan(
       row,
@@ -3601,22 +3652,28 @@ async function runAutomation(req: Request): Promise<AutomationResult> {
     const baseStatus = deriveFinancialStatus(
       integra.status,
       sourceFinancialStatus,
+      totalAmount,
       amount,
       integra.openAmount,
       integra.paidAmount,
       integra.upcomingAmount,
     )
     const amounts = applyManualAmountOverrides(deriveAmounts(totalAmount, baseStatus, amount, description, integra), selectedMatch)
-    const status =
-      isEntryDescription(description) && (amounts.paidAmount || 0) > 0
-        ? deriveEntryFinancialStatus(amounts.upcomingAmount)
-        : deriveManualFinancialStatus(
-            baseStatus,
-            selectedMatch,
-            amounts.openAmount,
-            amounts.paidAmount,
-            amounts.upcomingAmount,
-          )
+    const status = deriveFinalFinancialStatus(
+      deriveManualFinancialStatus(
+        baseStatus,
+        selectedMatch,
+        amounts.openAmount,
+        amounts.paidAmount,
+        amounts.upcomingAmount,
+      ),
+      totalAmount,
+      amount,
+      amounts.openAmount,
+      amounts.paidAmount,
+      amounts.upcomingAmount,
+      description,
+    )
     const updatePlan = buildUpdatePlan(
       row,
       targetColumns,
