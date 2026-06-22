@@ -2333,6 +2333,11 @@ function deriveManualFinancialStatus(
   return currentStatus
 }
 
+function deriveEntryFinancialStatus(dueDate: string) {
+  const overdueDays = dueDate ? diffDaysFromToday(dueDate) : null
+  return overdueDays !== null && overdueDays > 0 ? 'EM ATRASO' : 'A VENCER'
+}
+
 function applyManualAmountOverrides(
   amounts: { openAmount: number | null; paidAmount: number | null; upcomingAmount: number | null },
   selectedMatch: SelectedProcessMatch | undefined,
@@ -2355,6 +2360,15 @@ function deriveAmounts(
   const openAmount = integra.openAmount
   const paidAmount = integra.paidAmount
   const upcomingAmount = integra.upcomingAmount
+  const isEntry = isEntryDescription(description)
+
+  if (isEntry && parsedAmount !== null) {
+    return {
+      openAmount: parsedAmount,
+      paidAmount: 0,
+      upcomingAmount: totalAmount !== null && totalAmount > parsedAmount ? Math.max(totalAmount - parsedAmount, 0) : 0,
+    }
+  }
 
   if (openAmount !== null || paidAmount !== null || upcomingAmount !== null) {
     return {
@@ -3069,13 +3083,16 @@ async function runAutomation(req: Request): Promise<AutomationResult> {
           deriveAmounts(totalAmount, baseStatus, amount, description, integra),
           selectedMatch,
         )
-        const status = deriveManualFinancialStatus(
-          baseStatus,
-          selectedMatch,
-          amounts.openAmount,
-          amounts.paidAmount,
-          amounts.upcomingAmount,
-        )
+        const status =
+          isEntryDescription(description) && (amounts.openAmount || 0) > 0
+            ? deriveEntryFinancialStatus(dueDate)
+            : deriveManualFinancialStatus(
+                baseStatus,
+                selectedMatch,
+                amounts.openAmount,
+                amounts.paidAmount,
+                amounts.upcomingAmount,
+              )
         const updateTrello = deriveTrelloForUpdate(trello, selectedMatch)
         const updatePlan = buildUpdatePlan(
           workingRow,
@@ -3413,13 +3430,16 @@ async function runAutomation(req: Request): Promise<AutomationResult> {
       integra.upcomingAmount,
     )
     const amounts = applyManualAmountOverrides(deriveAmounts(totalAmount, baseStatus, amount, description, integra), selectedMatch)
-    const status = deriveManualFinancialStatus(
-      baseStatus,
-      selectedMatch,
-      amounts.openAmount,
-      amounts.paidAmount,
-      amounts.upcomingAmount,
-    )
+    const status =
+      isEntryDescription(description) && (amounts.openAmount || 0) > 0
+        ? deriveEntryFinancialStatus(dueDate)
+        : deriveManualFinancialStatus(
+            baseStatus,
+            selectedMatch,
+            amounts.openAmount,
+            amounts.paidAmount,
+            amounts.upcomingAmount,
+          )
     const updateTrello = deriveTrelloForUpdate(trello, selectedMatch)
     const updatePlan = buildUpdatePlan(
       row,
@@ -3588,13 +3608,16 @@ async function runAutomation(req: Request): Promise<AutomationResult> {
       integra.upcomingAmount,
     )
     const amounts = applyManualAmountOverrides(deriveAmounts(totalAmount, baseStatus, amount, description, integra), selectedMatch)
-    const status = deriveManualFinancialStatus(
-      baseStatus,
-      selectedMatch,
-      amounts.openAmount,
-      amounts.paidAmount,
-      amounts.upcomingAmount,
-    )
+    const status =
+      isEntryDescription(description) && (amounts.openAmount || 0) > 0
+        ? deriveEntryFinancialStatus(dueDate)
+        : deriveManualFinancialStatus(
+            baseStatus,
+            selectedMatch,
+            amounts.openAmount,
+            amounts.paidAmount,
+            amounts.upcomingAmount,
+          )
     const updatePlan = buildUpdatePlan(
       row,
       targetColumns,
