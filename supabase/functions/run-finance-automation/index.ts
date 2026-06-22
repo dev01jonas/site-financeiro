@@ -2333,9 +2333,8 @@ function deriveManualFinancialStatus(
   return currentStatus
 }
 
-function deriveEntryFinancialStatus(dueDate: string) {
-  const overdueDays = dueDate ? diffDaysFromToday(dueDate) : null
-  return overdueDays !== null && overdueDays > 0 ? 'EM ATRASO' : 'A VENCER'
+function deriveEntryFinancialStatus(upcomingAmount: number | null) {
+  return (upcomingAmount || 0) > 0 ? 'A VENCER' : 'EM DIA'
 }
 
 function applyManualAmountOverrides(
@@ -2364,8 +2363,8 @@ function deriveAmounts(
 
   if (isEntry && parsedAmount !== null) {
     return {
-      openAmount: parsedAmount,
-      paidAmount: 0,
+      openAmount: 0,
+      paidAmount: parsedAmount,
       upcomingAmount: totalAmount !== null && totalAmount > parsedAmount ? Math.max(totalAmount - parsedAmount, 0) : 0,
     }
   }
@@ -3084,8 +3083,8 @@ async function runAutomation(req: Request): Promise<AutomationResult> {
           selectedMatch,
         )
         const status =
-          isEntryDescription(description) && (amounts.openAmount || 0) > 0
-            ? deriveEntryFinancialStatus(dueDate)
+          isEntryDescription(description) && (amounts.paidAmount || 0) > 0
+            ? deriveEntryFinancialStatus(amounts.upcomingAmount)
             : deriveManualFinancialStatus(
                 baseStatus,
                 selectedMatch,
@@ -3431,8 +3430,8 @@ async function runAutomation(req: Request): Promise<AutomationResult> {
     )
     const amounts = applyManualAmountOverrides(deriveAmounts(totalAmount, baseStatus, amount, description, integra), selectedMatch)
     const status =
-      isEntryDescription(description) && (amounts.openAmount || 0) > 0
-        ? deriveEntryFinancialStatus(dueDate)
+      isEntryDescription(description) && (amounts.paidAmount || 0) > 0
+        ? deriveEntryFinancialStatus(amounts.upcomingAmount)
         : deriveManualFinancialStatus(
             baseStatus,
             selectedMatch,
@@ -3609,8 +3608,8 @@ async function runAutomation(req: Request): Promise<AutomationResult> {
     )
     const amounts = applyManualAmountOverrides(deriveAmounts(totalAmount, baseStatus, amount, description, integra), selectedMatch)
     const status =
-      isEntryDescription(description) && (amounts.openAmount || 0) > 0
-        ? deriveEntryFinancialStatus(dueDate)
+      isEntryDescription(description) && (amounts.paidAmount || 0) > 0
+        ? deriveEntryFinancialStatus(amounts.upcomingAmount)
         : deriveManualFinancialStatus(
             baseStatus,
             selectedMatch,
