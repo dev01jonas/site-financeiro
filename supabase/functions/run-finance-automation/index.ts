@@ -3895,7 +3895,22 @@ async function runAutomation(req: Request): Promise<AutomationResult> {
       await sheets.ensureRowCapacity(sheetName, maxRequestedRow)
       await sheets.ensureDropdownFormatting(sheetName, targetColumns, maxRequestedRow)
       await sheets.batchUpdateValues(updateRequests)
-      await sheets.formatMonthSeparatorRows(sheetName, monthSeparatorRows)
+      const sortedLayout = buildSortedMonthlySheetLayout(
+        await sheets.readSheetValues(sheetName),
+        Math.max(sheetHeaders.length, TARGET_END_COLUMN_INDEX),
+      )
+      await sheets.ensureRowCapacity(sheetName, sortedLayout.lastRowNumber)
+      await sheets.updateValues(
+        `${quoteSheetName(sheetName)}!A2:${columnLetter(TARGET_END_COLUMN_INDEX)}${sortedLayout.lastRowNumber}`,
+        sortedLayout.values,
+      )
+      await sheets.formatMonthlyLayoutRows(sheetName, sortedLayout.lastRowNumber, sortedLayout.separatorRows)
+
+      for (const entry of logEntries) {
+        if (entry.rowNumber && sortedLayout.rowNumberByOriginalRow.has(entry.rowNumber)) {
+          entry.rowNumber = sortedLayout.rowNumberByOriginalRow.get(entry.rowNumber) || entry.rowNumber
+        }
+      }
     } catch (error) {
       updateFailureMessage = `Falha ao atualizar Google Sheets: ${error instanceof Error ? error.message : 'erro desconhecido'}`
       errors += 1
