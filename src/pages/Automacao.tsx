@@ -131,6 +131,7 @@ type SelectedProcessMatchPayload = ManualProcessAdjustment & {
 
 type AutomationRequestPayload = {
   dryRun: boolean;
+  maintenanceAction?: 'normalize_months';
   sheetName?: string;
   pdfFileName?: string;
   pdfRecords: ExtractedRecord[];
@@ -702,6 +703,45 @@ export default function Automacao() {
     },
   });
 
+  const maintenanceMutation = useMutation({
+    mutationFn: async () => {
+      setAutomationProgress({
+        phase: 'processing',
+        percent: 0,
+        label: 'Corrigindo organização mensal da planilha...',
+      });
+
+      return runAutomationRequest({
+        dryRun: false,
+        maintenanceAction: 'normalize_months',
+        sheetName: sheetName.trim() || undefined,
+        pdfRecords: [],
+      });
+    },
+    onSuccess: (data) => {
+      setLastResult(data);
+      setAutomationProgress({
+        phase: 'complete',
+        percent: 100,
+        current: data.processed,
+        total: data.processed,
+        label: 'Organização mensal corrigida',
+      });
+      toast({
+        title: 'Organização mensal corrigida',
+        description: 'A aba foi reordenada pela data da coluna A e os separadores mensais foram recriados.',
+      });
+    },
+    onError: (error) => {
+      setAutomationProgress(null);
+      toast({
+        title: 'Não foi possível corrigir a organização mensal',
+        description: getErrorMessage(error),
+        variant: 'destructive',
+      });
+    },
+  });
+
   const allPendingSelectionsFilled = useMemo(
     () =>
       pendingSelections.every((selection) => {
@@ -906,7 +946,7 @@ export default function Automacao() {
             <Button
               type="button"
               className="h-11 w-full rounded-xl bg-[linear-gradient(135deg,hsl(var(--primary)),hsl(216_48%_34%))]"
-              disabled={automationMutation.isPending || pdfLoading}
+              disabled={automationMutation.isPending || maintenanceMutation.isPending || pdfLoading}
               onClick={() => {
                 setSelectedProcessMatches({});
                 setManualProcessAdjustments({});
@@ -923,6 +963,23 @@ export default function Automacao() {
                   <Play className="mr-2 h-4 w-4" />
                   {dryRun ? 'Testar automação' : 'Atualizar planilha'}
                 </>
+              )}
+            </Button>
+
+            <Button
+              type="button"
+              variant="outline"
+              className="h-11 w-full rounded-xl border-border/70 bg-background/60"
+              disabled={automationMutation.isPending || maintenanceMutation.isPending || pdfLoading}
+              onClick={() => maintenanceMutation.mutate()}
+            >
+              {maintenanceMutation.isPending ? (
+                <>
+                  <RefreshCw className="mr-2 h-4 w-4 animate-spin" />
+                  Corrigindo meses...
+                </>
+              ) : (
+                'Corrigir organização mensal'
               )}
             </Button>
           </CardContent>
