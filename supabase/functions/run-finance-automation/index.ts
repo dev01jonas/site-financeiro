@@ -3381,12 +3381,14 @@ async function runAutomation(req: Request): Promise<AutomationResult> {
     }
 
     let updateFailureMessage = ''
-    if (!dryRun && updateRequests.length > 0) {
+    if (!dryRun) {
       try {
         await sheets.ensureRowCapacity(sheetName, maxRequestedRow)
         await sheets.insertRows(sheetName, rowInsertions)
         await sheets.ensureDropdownFormatting(sheetName, targetColumns, maxRequestedRow)
-        await sheets.batchUpdateValues(updateRequests)
+        if (updateRequests.length > 0) {
+          await sheets.batchUpdateValues(updateRequests)
+        }
         const sortedLayout = buildSortedMonthlySheetLayout(
           await sheets.readSheetValues(sheetName),
           Math.max(sheetHeaders.length, TARGET_END_COLUMN_INDEX),
@@ -3961,12 +3963,14 @@ async function runAutomation(req: Request): Promise<AutomationResult> {
   }
 
   let updateFailureMessage = ''
-  if (!dryRun && updateRequests.length > 0) {
+  if (!dryRun) {
     try {
       const maxRequestedRow = Math.max(values.length, nextRowNumber)
       await sheets.ensureRowCapacity(sheetName, maxRequestedRow)
       await sheets.ensureDropdownFormatting(sheetName, targetColumns, maxRequestedRow)
-      await sheets.batchUpdateValues(updateRequests)
+      if (updateRequests.length > 0) {
+        await sheets.batchUpdateValues(updateRequests)
+      }
       const sortedLayout = buildSortedMonthlySheetLayout(
         await sheets.readSheetValues(sheetName),
         Math.max(sheetHeaders.length, TARGET_END_COLUMN_INDEX),
