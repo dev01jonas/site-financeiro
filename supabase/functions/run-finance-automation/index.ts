@@ -15,7 +15,6 @@ const DEFAULT_VALUE_SOURCE_SHEET_NAME = 'Clientes(V1)'
 const MONTH_NAMES = [
   'JANEIRO',
   'FEVEREIRO',
-  'MARCO',
   'MARÇO',
   'ABRIL',
   'MAIO',
@@ -71,6 +70,7 @@ type SheetCellValue = string | number | null
 type SheetValues = SheetCellValue[][]
 type AutomationBody = {
   dryRun?: boolean
+  maintenanceAction?: 'normalize_months'
   maxRows?: number
   startRow?: number
   sheetName?: string
@@ -2796,6 +2796,74 @@ async function assertCanRun(req: Request) {
   }
 }
 
+async function normalizeMonthlySheetLayout(
+  sheets: GoogleSheetsService,
+  sheetName: string,
+  dryRun: boolean,
+): Promise<AutomationResult> {
+  const timestamp = buildTimestamp()
+  const values = await sheets.readSheetValues(sheetName)
+  const sortedLayout = buildSortedMonthlySheetLayout(values, TARGET_END_COLUMN_INDEX)
+
+  if (!dryRun) {
+    await sheets.ensureRowCapacity(sheetName, sortedLayout.lastRowNumber)
+    await sheets.updateValues(
+      `${quoteSheetName(sheetName)}!A2:${columnLetter(TARGET_END_COLUMN_INDEX)}${sortedLayout.lastRowNumber}`,
+      sortedLayout.values,
+    )
+    await sheets.formatMonthlyLayoutRows(sheetName, sortedLayout.lastRowNumber, sortedLayout.separatorRows)
+  }
+
+  const preview = sortedLayout.separatorRows.map((rowNumber) => ({
+    rowNumber,
+    clientName: String(getCell(sortedLayout.values[rowNumber - 2] || [], SHEET_TOTAL_VALUE_COLUMN_INDEX) || ''),
+    action: dryRun ? 'Prévia da organização mensal' : 'Organização mensal aplicada',
+    status: 'mes_corrigido',
+    sources: ['Google Sheets'],
+    errorMessage: '',
+    cardUrl: '',
+  }))
+
+  return {
+    dryRun,
+    sheetName,
+    pdfFileName: '',
+    timestamp,
+    startRow: 2,
+    processed: Math.max(findLastFilledRow(values) - 1, 0),
+    skipped: 0,
+    matched: 0,
+    updated: dryRun ? 0 : sortedLayout.values.length,
+    refreshed: 0,
+    ignored: 0,
+    notFound: 0,
+    errors: 0,
+    updatedCells: dryRun ? 0 : 1,
+    logRows: 0,
+    preview,
+    pendingCount: 0,
+    pendingSelections: [],
+    dashboard: {
+      created: 0,
+      updated: dryRun ? 0 : sortedLayout.values.length,
+      refreshed: 0,
+      pending: 0,
+      notFound: 0,
+      errors: 0,
+      matched: 0,
+      processed: Math.max(findLastFilledRow(values) - 1, 0),
+      financial: {
+        openAmount: 0,
+        paidAmount: 0,
+        upcomingAmount: 0,
+      },
+      stageBreakdown: [],
+      recordStatusBreakdown: [],
+      actionBreakdown: [],
+    },
+  }
+}
+
 async function runAutomation(req: Request): Promise<AutomationResult> {
   await assertCanRun(req)
 
@@ -2820,6 +2888,10 @@ async function runAutomation(req: Request): Promise<AutomationResult> {
   const sheets = new GoogleSheetsService(spreadsheetId, accessToken)
   await sheets.ensureColumnCapacity(sheetName, TARGET_END_COLUMN_INDEX)
   await sheets.ensureLogSheet()
+
+  if (body.maintenanceAction === 'normalize_months') {
+    return normalizeMonthlySheetLayout(sheets, sheetName, dryRun)
+  }
 
   if (pdfRecords.length === 0) {
     const timestamp = buildTimestamp()

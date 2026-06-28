@@ -33,6 +33,7 @@ import { extractBillingRecords, type ExtractedRecord } from '@/lib/pdf-extractor
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
 import { ScrollArea } from '@/components/ui/scroll-area';
+import { Progress } from '@/components/ui/progress';
 
 type AutomationPreviewRow = {
   rowNumber: number | null;
@@ -141,6 +142,14 @@ type AutomationRequestPayload = {
 type AutomationMutationPayload = {
   selectedMatches?: Record<string, string | SelectedProcessMatchPayload>;
   allowFallbackSelections?: boolean;
+};
+
+type AutomationProgress = {
+  phase: 'reading' | 'processing' | 'complete';
+  percent: number;
+  label: string;
+  current?: number;
+  total?: number;
 };
 
 const AUTOMATION_BATCH_SIZE = 25;
@@ -390,11 +399,26 @@ function mergeAutomationResults(
   };
 }
 
-async function runAutomationInChunks(payload: AutomationRequestPayload) {
+async function runAutomationInChunks(
+  payload: AutomationRequestPayload,
+  onProgress?: (progress: AutomationProgress) => void,
+) {
   let mergedResult: AutomationResult | null = null;
+  const total = payload.pdfRecords.length;
 
   for (let start = 0; start < payload.pdfRecords.length; start += AUTOMATION_BATCH_SIZE) {
     const chunk = payload.pdfRecords.slice(start, start + AUTOMATION_BATCH_SIZE);
+    const chunkNumber = Math.floor(start / AUTOMATION_BATCH_SIZE) + 1;
+    const totalChunks = Math.ceil(total / AUTOMATION_BATCH_SIZE);
+
+    onProgress?.({
+      phase: 'processing',
+      percent: Math.round((start / total) * 100),
+      current: start,
+      total,
+      label: `Processando lote ${chunkNumber} de ${totalChunks}`,
+    });
+
     const chunkResult = await runAutomationRequest({
       ...payload,
       pdfRecords: chunk,
@@ -402,6 +426,15 @@ async function runAutomationInChunks(payload: AutomationRequestPayload) {
     });
 
     mergedResult = mergeAutomationResults(mergedResult, chunkResult);
+    const processed = Math.min(start + chunk.length, total);
+
+    onProgress?.({
+      phase: 'processing',
+      percent: Math.round((processed / total) * 100),
+      current: processed,
+      total,
+      label: `Processados ${processed} de ${total} registros`,
+    });
   }
 
   if (!mergedResult) {
@@ -509,6 +542,7 @@ export default function Automacao() {
   const [processSelectionDialogOpen, setProcessSelectionDialogOpen] = useState(false);
   const [selectedProcessMatches, setSelectedProcessMatches] = useState<Record<string, string>>({});
   const [manualProcessAdjustments, setManualProcessAdjustments] = useState<Record<string, ManualProcessAdjustment>>({});
+  const [automationProgress, setAutomationProgress] = useState<AutomationProgress | null>(null);
 
   const handlePdfSelection = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
@@ -516,16 +550,29 @@ export default function Automacao() {
 
     setPdfLoading(true);
     setPdfFileName(file.name);
+    setAutomationProgress({
+      phase: 'reading',
+      percent: 5,
+      label: 'Lendo arquivo Excel...',
+    });
 
     try {
       const records = await extractBillingRecords(file);
       setPdfRecords(records);
+      setAutomationProgress({
+        phase: 'complete',
+        percent: 100,
+        current: records.length,
+        total: records.length,
+        label: `${records.length} registro(s) carregado(s) do Excel`,
+      });
       toast({
         title: 'Excel processado',
         description: `${records.length} registro(s) extraído(s) do Excel.`,
       });
     } catch (error) {
       setPdfRecords([]);
+      setAutomationProgress(null);
       toast({
         title: 'Não foi possível ler o Excel',
         description: getErrorMessage(error),
@@ -585,6 +632,13 @@ export default function Automacao() {
       }
 
       const selectedMatches = confirmation.selectedMatches || {};
+      setAutomationProgress({
+        phase: 'processing',
+        percent: 0,
+        current: 0,
+        total: pdfRecords.length,
+        label: 'Preparando execução da automação...',
+      });
       const payload = {
         dryRun,
         sheetName: sheetName.trim() || undefined,
@@ -594,11 +648,18 @@ export default function Automacao() {
         selectedProcessMatches: selectedMatches,
       };
 
-      return runAutomationInChunks(payload);
+      return runAutomationInChunks(payload, setAutomationProgress);
     },
     onSuccess: (data) => {
       setLastResult(data);
       if (data.pendingSelections.length > 0) {
+        setAutomationProgress({
+          phase: 'complete',
+          percent: 100,
+          current: data.processed,
+          total: data.processed,
+          label: 'Execução pausada aguardando seleção de processo',
+        });
         const suggestedMatches = Object.fromEntries(
           data.pendingSelections
             .filter((selection) => selection.suggestedSelectionId)
@@ -619,12 +680,20 @@ export default function Automacao() {
       setPendingSelections([]);
       setManualProcessAdjustments({});
       setProcessSelectionDialogOpen(false);
+      setAutomationProgress({
+        phase: 'complete',
+        percent: 100,
+        current: data.processed,
+        total: data.processed,
+        label: 'Execução finalizada',
+      });
       toast({
         title: data.dryRun ? 'Teste concluído' : 'Planilha atualizada',
         description: `${data.matched} cliente(s) com match no Excel, ${data.updated + data.refreshed} linha(s) tratada(s).`,
       });
     },
     onError: (error) => {
+      setAutomationProgress(null);
       toast({
         title: 'Não foi possível executar a automação',
         description: getErrorMessage(error),
@@ -793,6 +862,24 @@ export default function Automacao() {
                 </span>
               </label>
               <input id="pdf-upload" type="file" accept=".xls,.xlsx" className="hidden" onChange={handlePdfSelection} />
+              {automationProgress ? (
+                <div className="space-y-2 rounded-xl border border-border/70 bg-muted/20 p-3">
+                  <div className="flex items-center justify-between gap-3 text-xs">
+                    <span className="font-medium text-foreground">{automationProgress.label}</span>
+                    <span className="font-semibold text-primary">{automationProgress.percent}%</span>
+                  </div>
+                  <Progress value={automationProgress.percent} className="h-2 bg-background/80" />
+                  {typeof automationProgress.current === 'number' && typeof automationProgress.total === 'number' ? (
+                    <p className="text-xs text-muted-foreground">
+                      {automationProgress.current} de {automationProgress.total} registro(s)
+                    </p>
+                  ) : (
+                    <p className="text-xs text-muted-foreground">
+                      Aguarde enquanto o arquivo é preparado para a automação.
+                    </p>
+                  )}
+                </div>
+              ) : null}
             </div>
 
             <div className="flex items-center justify-between gap-4 rounded-2xl border border-border/70 bg-background/80 p-4">
