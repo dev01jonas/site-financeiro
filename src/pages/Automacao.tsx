@@ -154,7 +154,7 @@ type AutomationProgress = {
   total?: number;
 };
 
-const AUTOMATION_BATCH_SIZE = 50;
+const AUTOMATION_BATCH_SIZE = 15;
 
 function getErrorMessage(error: unknown) {
   if (error instanceof Error) return error.message;
@@ -187,7 +187,7 @@ function getFunctionErrorMessage(error: unknown) {
   const lower = message.toLowerCase();
 
   if (lower.includes('functions_http_error') || lower.includes('edge function returned a non-2xx status code')) {
-    return 'A automação respondeu com erro no Supabase. Confira o Excel enviado, a aba da planilha e as integrações.';
+    return 'A automação respondeu com erro no Supabase. O processamento agora roda em lotes menores; tente novamente e acompanhe a barra de progresso.';
   }
 
   if (
@@ -197,6 +197,10 @@ function getFunctionErrorMessage(error: unknown) {
     lower.includes('network')
   ) {
     return 'Não foi possível alcançar a função de automação no Supabase.';
+  }
+
+  if (lower.includes('not having enough compute resources') || lower.includes('compute resources')) {
+    return 'O Supabase ficou sem recurso para essa rodada. O processamento foi ajustado para lotes menores; tente novamente. Se persistir, rode por períodos menores.';
   }
 
   if (lower.includes('not found') || lower.includes('404')) {
@@ -410,7 +414,6 @@ async function runAutomationInChunks(
 
   for (let start = 0; start < payload.pdfRecords.length; start += AUTOMATION_BATCH_SIZE) {
     const chunk = payload.pdfRecords.slice(start, start + AUTOMATION_BATCH_SIZE);
-    const isLastChunk = start + chunk.length >= total;
     const chunkNumber = Math.floor(start / AUTOMATION_BATCH_SIZE) + 1;
     const totalChunks = Math.ceil(total / AUTOMATION_BATCH_SIZE);
 
@@ -426,7 +429,7 @@ async function runAutomationInChunks(
       ...payload,
       pdfRecords: chunk,
       clearLog: start === 0,
-      normalizeLayout: isLastChunk,
+      normalizeLayout: false,
     });
 
     mergedResult = mergeAutomationResults(mergedResult, chunkResult);

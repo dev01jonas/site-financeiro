@@ -2896,7 +2896,7 @@ async function runAutomation(req: Request): Promise<AutomationResult> {
   const startRow = Number.isFinite(parsedStartRow) && parsedStartRow >= 2 ? parsedStartRow : 2
   const pdfRecords = Array.isArray(body.pdfRecords) ? body.pdfRecords : []
   const clearLog = body.clearLog !== false
-  const normalizeLayout = body.normalizeLayout !== false
+  const normalizeLayout = body.normalizeLayout === true
   const selectedProcessMatches = normalizeSelectedProcessMatches(body.selectedProcessMatches)
   const allowFallbackSelections = body.allowFallbackSelections === true
 
