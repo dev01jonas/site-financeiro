@@ -65,12 +65,15 @@ const REGUA_COLORS = [
   { value: 'Pago', background: '#0b8043', foreground: '#ffffff', bold: true },
   { value: 'Renegociado', background: '#ffe599', foreground: '#7f6000' },
 ]
+const TRELLO_LOOKUP_CACHE_TTL_MS = 5 * 60 * 1000
+const trelloLookupCache = new Map<string, { expiresAt: number; promise: Promise<TrelloLookupResult> }>()
 
 type SheetCellValue = string | number | null
 type SheetValues = SheetCellValue[][]
 type AutomationBody = {
   dryRun?: boolean
   maintenanceAction?: 'normalize_months'
+  normalizeLayout?: boolean
   maxRows?: number
   startRow?: number
   sheetName?: string
@@ -2025,14 +2028,30 @@ class TrelloService {
   }
 
   async searchClientCard(clientName: string): Promise<TrelloLookupResult> {
-    const cacheKey = normalizeClientName(clientName)
+    const cacheKey = [
+      this.boardId || 'all-boards',
+      [...this.listIds].sort().join(',') || 'all-lists',
+      normalizeClientName(clientName),
+    ].join('|')
     const cached = this.clientLookupCache.get(cacheKey)
     if (cached) {
       return cached
     }
+    const sharedCached = trelloLookupCache.get(cacheKey)
+    if (sharedCached && sharedCached.expiresAt > Date.now()) {
+      this.clientLookupCache.set(cacheKey, sharedCached.promise)
+      return sharedCached.promise
+    }
+    if (sharedCached) {
+      trelloLookupCache.delete(cacheKey)
+    }
 
     const lookupPromise = this.searchClientCardInternal(clientName)
     this.clientLookupCache.set(cacheKey, lookupPromise)
+    trelloLookupCache.set(cacheKey, {
+      expiresAt: Date.now() + TRELLO_LOOKUP_CACHE_TTL_MS,
+      promise: lookupPromise,
+    })
     return lookupPromise
   }
 
@@ -2877,6 +2896,7 @@ async function runAutomation(req: Request): Promise<AutomationResult> {
   const startRow = Number.isFinite(parsedStartRow) && parsedStartRow >= 2 ? parsedStartRow : 2
   const pdfRecords = Array.isArray(body.pdfRecords) ? body.pdfRecords : []
   const clearLog = body.clearLog !== false
+  const normalizeLayout = body.normalizeLayout !== false
   const selectedProcessMatches = normalizeSelectedProcessMatches(body.selectedProcessMatches)
   const allowFallbackSelections = body.allowFallbackSelections === true
 
@@ -3381,7 +3401,7 @@ async function runAutomation(req: Request): Promise<AutomationResult> {
     }
 
     let updateFailureMessage = ''
-    if (!dryRun) {
+    if (!dryRun && (updateRequests.length > 0 || normalizeLayout)) {
       try {
         await sheets.ensureRowCapacity(sheetName, maxRequestedRow)
         await sheets.insertRows(sheetName, rowInsertions)
@@ -3389,20 +3409,22 @@ async function runAutomation(req: Request): Promise<AutomationResult> {
         if (updateRequests.length > 0) {
           await sheets.batchUpdateValues(updateRequests)
         }
-        const sortedLayout = buildSortedMonthlySheetLayout(
-          await sheets.readSheetValues(sheetName),
-          Math.max(sheetHeaders.length, TARGET_END_COLUMN_INDEX),
-        )
-        await sheets.ensureRowCapacity(sheetName, sortedLayout.lastRowNumber)
-        await sheets.updateValues(
-          `${quoteSheetName(sheetName)}!A2:${columnLetter(TARGET_END_COLUMN_INDEX)}${sortedLayout.lastRowNumber}`,
-          sortedLayout.values,
-        )
-        await sheets.formatMonthlyLayoutRows(sheetName, sortedLayout.lastRowNumber, sortedLayout.separatorRows)
+        if (normalizeLayout) {
+          const sortedLayout = buildSortedMonthlySheetLayout(
+            await sheets.readSheetValues(sheetName),
+            Math.max(sheetHeaders.length, TARGET_END_COLUMN_INDEX),
+          )
+          await sheets.ensureRowCapacity(sheetName, sortedLayout.lastRowNumber)
+          await sheets.updateValues(
+            `${quoteSheetName(sheetName)}!A2:${columnLetter(TARGET_END_COLUMN_INDEX)}${sortedLayout.lastRowNumber}`,
+            sortedLayout.values,
+          )
+          await sheets.formatMonthlyLayoutRows(sheetName, sortedLayout.lastRowNumber, sortedLayout.separatorRows)
 
-        for (const entry of logEntries) {
-          if (entry.rowNumber && sortedLayout.rowNumberByOriginalRow.has(entry.rowNumber)) {
-            entry.rowNumber = sortedLayout.rowNumberByOriginalRow.get(entry.rowNumber) || entry.rowNumber
+          for (const entry of logEntries) {
+            if (entry.rowNumber && sortedLayout.rowNumberByOriginalRow.has(entry.rowNumber)) {
+              entry.rowNumber = sortedLayout.rowNumberByOriginalRow.get(entry.rowNumber) || entry.rowNumber
+            }
           }
         }
       } catch (error) {
@@ -3963,7 +3985,7 @@ async function runAutomation(req: Request): Promise<AutomationResult> {
   }
 
   let updateFailureMessage = ''
-  if (!dryRun) {
+  if (!dryRun && (updateRequests.length > 0 || normalizeLayout)) {
     try {
       const maxRequestedRow = Math.max(values.length, nextRowNumber)
       await sheets.ensureRowCapacity(sheetName, maxRequestedRow)
@@ -3971,20 +3993,22 @@ async function runAutomation(req: Request): Promise<AutomationResult> {
       if (updateRequests.length > 0) {
         await sheets.batchUpdateValues(updateRequests)
       }
-      const sortedLayout = buildSortedMonthlySheetLayout(
-        await sheets.readSheetValues(sheetName),
-        Math.max(sheetHeaders.length, TARGET_END_COLUMN_INDEX),
-      )
-      await sheets.ensureRowCapacity(sheetName, sortedLayout.lastRowNumber)
-      await sheets.updateValues(
-        `${quoteSheetName(sheetName)}!A2:${columnLetter(TARGET_END_COLUMN_INDEX)}${sortedLayout.lastRowNumber}`,
-        sortedLayout.values,
-      )
-      await sheets.formatMonthlyLayoutRows(sheetName, sortedLayout.lastRowNumber, sortedLayout.separatorRows)
+      if (normalizeLayout) {
+        const sortedLayout = buildSortedMonthlySheetLayout(
+          await sheets.readSheetValues(sheetName),
+          Math.max(sheetHeaders.length, TARGET_END_COLUMN_INDEX),
+        )
+        await sheets.ensureRowCapacity(sheetName, sortedLayout.lastRowNumber)
+        await sheets.updateValues(
+          `${quoteSheetName(sheetName)}!A2:${columnLetter(TARGET_END_COLUMN_INDEX)}${sortedLayout.lastRowNumber}`,
+          sortedLayout.values,
+        )
+        await sheets.formatMonthlyLayoutRows(sheetName, sortedLayout.lastRowNumber, sortedLayout.separatorRows)
 
-      for (const entry of logEntries) {
-        if (entry.rowNumber && sortedLayout.rowNumberByOriginalRow.has(entry.rowNumber)) {
-          entry.rowNumber = sortedLayout.rowNumberByOriginalRow.get(entry.rowNumber) || entry.rowNumber
+        for (const entry of logEntries) {
+          if (entry.rowNumber && sortedLayout.rowNumberByOriginalRow.has(entry.rowNumber)) {
+            entry.rowNumber = sortedLayout.rowNumberByOriginalRow.get(entry.rowNumber) || entry.rowNumber
+          }
         }
       }
     } catch (error) {

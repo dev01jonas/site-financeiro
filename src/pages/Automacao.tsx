@@ -132,6 +132,7 @@ type SelectedProcessMatchPayload = ManualProcessAdjustment & {
 type AutomationRequestPayload = {
   dryRun: boolean;
   maintenanceAction?: 'normalize_months';
+  normalizeLayout?: boolean;
   sheetName?: string;
   pdfFileName?: string;
   pdfRecords: ExtractedRecord[];
@@ -153,7 +154,7 @@ type AutomationProgress = {
   total?: number;
 };
 
-const AUTOMATION_BATCH_SIZE = 25;
+const AUTOMATION_BATCH_SIZE = 50;
 
 function getErrorMessage(error: unknown) {
   if (error instanceof Error) return error.message;
@@ -409,6 +410,7 @@ async function runAutomationInChunks(
 
   for (let start = 0; start < payload.pdfRecords.length; start += AUTOMATION_BATCH_SIZE) {
     const chunk = payload.pdfRecords.slice(start, start + AUTOMATION_BATCH_SIZE);
+    const isLastChunk = start + chunk.length >= total;
     const chunkNumber = Math.floor(start / AUTOMATION_BATCH_SIZE) + 1;
     const totalChunks = Math.ceil(total / AUTOMATION_BATCH_SIZE);
 
@@ -424,6 +426,7 @@ async function runAutomationInChunks(
       ...payload,
       pdfRecords: chunk,
       clearLog: start === 0,
+      normalizeLayout: isLastChunk,
     });
 
     mergedResult = mergeAutomationResults(mergedResult, chunkResult);
