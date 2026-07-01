@@ -3065,7 +3065,7 @@ async function repairDashboard(
   const values = await sheets.readSheetValues(sheetName)
   const processed = Math.max(findLastFilledRow(values) - 1, 0)
 
-  await sheets.ensureRowCapacity(DASHBOARD_SHEET_NAME, 80)
+  await sheets.ensureRowCapacity(DASHBOARD_SHEET_NAME, 125)
   await sheets.ensureColumnCapacity(DASHBOARD_SHEET_NAME, 14)
   const dashboardProperties = await sheets.getSheetProperties(DASHBOARD_SHEET_NAME)
   const dashboardSheet = quoteSheetName(DASHBOARD_SHEET_NAME)
@@ -3219,6 +3219,131 @@ async function repairDashboard(
       },
     ])
 
+    const dashboardCellRange = (startRowIndex: number, endRowIndex: number, startColumnIndex: number, endColumnIndex: number) =>
+      gridRange(dashboardProperties.sheetId, startRowIndex, endRowIndex, startColumnIndex, endColumnIndex)
+    const background = (hex: string) => ({ backgroundColorStyle: { rgbColor: hexToGoogleColor(hex) } })
+    const textColor = (hex: string) => ({ foregroundColorStyle: { rgbColor: hexToGoogleColor(hex) } })
+    const repeatCell = (
+      range: ReturnType<typeof dashboardCellRange>,
+      userEnteredFormat: Record<string, unknown>,
+      fields: string,
+    ) => ({ repeatCell: { range, cell: { userEnteredFormat }, fields } })
+    const mergeRange = (startRowIndex: number, endRowIndex: number, startColumnIndex: number, endColumnIndex: number) => ({
+      mergeCells: {
+        range: dashboardCellRange(startRowIndex, endRowIndex, startColumnIndex, endColumnIndex),
+        mergeType: 'MERGE_ALL',
+      },
+    })
+    const sectionTitleRanges = [
+      dashboardCellRange(8, 9, 1, 6),
+      dashboardCellRange(8, 9, 7, 12),
+      dashboardCellRange(17, 18, 1, 6),
+      dashboardCellRange(17, 18, 7, 9),
+      dashboardCellRange(29, 30, 1, 5),
+      dashboardCellRange(29, 30, 7, 11),
+      dashboardCellRange(47, 48, 1, 5),
+      dashboardCellRange(47, 48, 7, 11),
+    ]
+    const tableHeaderRanges = [
+      dashboardCellRange(9, 10, 1, 6),
+      dashboardCellRange(9, 10, 7, 12),
+      dashboardCellRange(18, 19, 1, 6),
+      dashboardCellRange(18, 19, 7, 9),
+      dashboardCellRange(30, 31, 1, 5),
+      dashboardCellRange(30, 31, 7, 11),
+      dashboardCellRange(48, 49, 1, 5),
+      dashboardCellRange(48, 49, 7, 11),
+    ]
+    const moneyRanges = [
+      dashboardCellRange(5, 6, 5, 6),
+      dashboardCellRange(5, 6, 9, 10),
+      dashboardCellRange(10, 16, 3, 6),
+      dashboardCellRange(10, 16, 8, 11),
+      dashboardCellRange(19, 29, 5, 6),
+      dashboardCellRange(31, 39, 4, 5),
+      dashboardCellRange(31, 39, 10, 11),
+    ]
+    const dashboardFormatRequests = [
+      repeatCell(
+        dashboardCellRange(0, 110, 0, 12),
+        { ...background('#eaf2ff'), horizontalAlignment: 'CENTER', verticalAlignment: 'MIDDLE', textFormat: { fontFamily: 'Cambria', fontSize: 10 } },
+        'userEnteredFormat(backgroundColorStyle,horizontalAlignment,verticalAlignment,textFormat)',
+      ),
+      repeatCell(
+        dashboardCellRange(0, 3, 1, 12),
+        { ...background('#0f172a'), horizontalAlignment: 'CENTER', verticalAlignment: 'MIDDLE', textFormat: { ...textColor('#ffffff'), bold: true, fontFamily: 'Cambria', fontSize: 12 } },
+        'userEnteredFormat(backgroundColorStyle,horizontalAlignment,verticalAlignment,textFormat)',
+      ),
+      repeatCell(
+        dashboardCellRange(0, 1, 1, 12),
+        { textFormat: { ...textColor('#ffffff'), bold: true, fontFamily: 'Cambria', fontSize: 18 } },
+        'userEnteredFormat(textFormat)',
+      ),
+      repeatCell(
+        dashboardCellRange(4, 5, 1, 12),
+        { ...background('#9bbcf0'), horizontalAlignment: 'CENTER', textFormat: { bold: true, fontFamily: 'Cambria', fontSize: 10 } },
+        'userEnteredFormat(backgroundColorStyle,horizontalAlignment,textFormat)',
+      ),
+      repeatCell(
+        dashboardCellRange(5, 6, 1, 12),
+        { ...background('#f8fafc'), horizontalAlignment: 'CENTER', textFormat: { bold: true, fontFamily: 'Cambria', fontSize: 12 } },
+        'userEnteredFormat(backgroundColorStyle,horizontalAlignment,textFormat)',
+      ),
+      ...sectionTitleRanges.map((range) =>
+        repeatCell(
+          range,
+          { ...background('#1f4e8c'), horizontalAlignment: 'CENTER', textFormat: { ...textColor('#ffffff'), bold: true, fontFamily: 'Cambria', fontSize: 12 } },
+          'userEnteredFormat(backgroundColorStyle,horizontalAlignment,textFormat)',
+        ),
+      ),
+      ...tableHeaderRanges.map((range) =>
+        repeatCell(
+          range,
+          { ...background('#a9c7f5'), horizontalAlignment: 'CENTER', textFormat: { bold: true, fontFamily: 'Cambria', fontSize: 10 } },
+          'userEnteredFormat(backgroundColorStyle,horizontalAlignment,textFormat)',
+        ),
+      ),
+      ...moneyRanges.map((range) =>
+        repeatCell(
+          range,
+          { numberFormat: { type: 'CURRENCY', pattern: 'R$ #,##0.00' } },
+          'userEnteredFormat.numberFormat',
+        ),
+      ),
+      ...[
+        dashboardCellRange(5, 6, 1, 2),
+        dashboardCellRange(5, 6, 3, 4),
+        dashboardCellRange(5, 6, 7, 8),
+      ].map((range) =>
+        repeatCell(
+          range,
+          { numberFormat: { type: 'NUMBER', pattern: '#,##0' } },
+          'userEnteredFormat.numberFormat',
+        ),
+      ),
+      repeatCell(
+        dashboardCellRange(5, 6, 11, 12),
+        { numberFormat: { type: 'DATE', pattern: 'dd/mm/yyyy' } },
+        'userEnteredFormat.numberFormat',
+      ),
+      mergeRange(0, 1, 1, 12),
+      mergeRange(1, 2, 1, 12),
+      mergeRange(2, 3, 1, 12),
+      mergeRange(8, 9, 1, 6),
+      mergeRange(8, 9, 7, 12),
+      mergeRange(17, 18, 1, 6),
+      mergeRange(17, 18, 7, 9),
+      mergeRange(29, 30, 1, 5),
+      mergeRange(29, 30, 7, 11),
+      mergeRange(47, 48, 1, 5),
+      mergeRange(47, 48, 7, 11),
+    ]
+
+    await sheets.request(':batchUpdate', {
+      method: 'POST',
+      body: JSON.stringify({ requests: dashboardFormatRequests }),
+    })
+
     const metadata = await sheets.request('?fields=sheets(properties(sheetId,title),charts(chartId))')
     const dashboardSheetMetadata = (metadata.sheets || []).find(
       (sheet: { properties?: { title?: string } }) => sheet.properties?.title === DASHBOARD_SHEET_NAME,
@@ -3233,7 +3358,7 @@ async function repairDashboard(
             spec: dashboardPieChartSpec(dashboardProperties.sheetId),
             position: {
               overlayPosition: {
-                anchorCell: { sheetId: dashboardProperties.sheetId, rowIndex: 36, columnIndex: 6 },
+                anchorCell: { sheetId: dashboardProperties.sheetId, rowIndex: 71, columnIndex: 1 },
                 offsetXPixels: 10,
                 offsetYPixels: 8,
                 widthPixels: 440,
@@ -3249,10 +3374,10 @@ async function repairDashboard(
             spec: dashboardMonthlyLineChartSpec(dashboardProperties.sheetId),
             position: {
               overlayPosition: {
-                anchorCell: { sheetId: dashboardProperties.sheetId, rowIndex: 55, columnIndex: 1 },
+                anchorCell: { sheetId: dashboardProperties.sheetId, rowIndex: 71, columnIndex: 6 },
                 offsetXPixels: 10,
                 offsetYPixels: 8,
-                widthPixels: 520,
+                widthPixels: 560,
                 heightPixels: 320,
               },
             },
@@ -3265,10 +3390,10 @@ async function repairDashboard(
             spec: dashboardReguaBarChartSpec(dashboardProperties.sheetId),
             position: {
               overlayPosition: {
-                anchorCell: { sheetId: dashboardProperties.sheetId, rowIndex: 55, columnIndex: 6 },
+                anchorCell: { sheetId: dashboardProperties.sheetId, rowIndex: 92, columnIndex: 1 },
                 offsetXPixels: 10,
                 offsetYPixels: 8,
-                widthPixels: 520,
+                widthPixels: 760,
                 heightPixels: 320,
               },
             },
@@ -3333,6 +3458,134 @@ async function repairDashboard(
   }
 }
 
+async function applyDashboardModernLayout(sheets: GoogleSheetsService, sheetId: number) {
+  const cellRange = (startRowIndex: number, endRowIndex: number, startColumnIndex: number, endColumnIndex: number) =>
+    gridRange(sheetId, startRowIndex, endRowIndex, startColumnIndex, endColumnIndex)
+  const background = (hex: string) => ({ backgroundColorStyle: { rgbColor: hexToGoogleColor(hex) } })
+  const textColor = (hex: string) => ({ foregroundColorStyle: { rgbColor: hexToGoogleColor(hex) } })
+  const repeatCell = (
+    range: ReturnType<typeof cellRange>,
+    userEnteredFormat: Record<string, unknown>,
+    fields: string,
+  ) => ({ repeatCell: { range, cell: { userEnteredFormat }, fields } })
+  const mergeRange = (startRowIndex: number, endRowIndex: number, startColumnIndex: number, endColumnIndex: number) => ({
+    mergeCells: {
+      range: cellRange(startRowIndex, endRowIndex, startColumnIndex, endColumnIndex),
+      mergeType: 'MERGE_ALL',
+    },
+  })
+  const sectionTitleRanges = [
+    cellRange(8, 9, 1, 6),
+    cellRange(8, 9, 7, 12),
+    cellRange(17, 18, 1, 6),
+    cellRange(17, 18, 7, 9),
+    cellRange(29, 30, 1, 5),
+    cellRange(29, 30, 7, 11),
+    cellRange(47, 48, 1, 5),
+    cellRange(47, 48, 7, 11),
+  ]
+  const tableHeaderRanges = [
+    cellRange(9, 10, 1, 6),
+    cellRange(9, 10, 7, 12),
+    cellRange(18, 19, 1, 6),
+    cellRange(18, 19, 7, 9),
+    cellRange(30, 31, 1, 5),
+    cellRange(30, 31, 7, 11),
+    cellRange(48, 49, 1, 5),
+    cellRange(48, 49, 7, 11),
+  ]
+  const moneyRanges = [
+    cellRange(5, 6, 5, 6),
+    cellRange(5, 6, 9, 10),
+    cellRange(10, 16, 3, 6),
+    cellRange(10, 16, 8, 11),
+    cellRange(19, 29, 5, 6),
+    cellRange(31, 39, 4, 5),
+    cellRange(31, 39, 10, 11),
+  ]
+
+  await sheets.request(':batchUpdate', {
+    method: 'POST',
+    body: JSON.stringify({
+      requests: [
+        repeatCell(
+          cellRange(0, 110, 0, 12),
+          { ...background('#eaf2ff'), horizontalAlignment: 'CENTER', verticalAlignment: 'MIDDLE', textFormat: { fontFamily: 'Cambria', fontSize: 10 } },
+          'userEnteredFormat(backgroundColorStyle,horizontalAlignment,verticalAlignment,textFormat)',
+        ),
+        repeatCell(
+          cellRange(0, 3, 1, 12),
+          { ...background('#0f172a'), horizontalAlignment: 'CENTER', verticalAlignment: 'MIDDLE', textFormat: { ...textColor('#ffffff'), bold: true, fontFamily: 'Cambria', fontSize: 12 } },
+          'userEnteredFormat(backgroundColorStyle,horizontalAlignment,verticalAlignment,textFormat)',
+        ),
+        repeatCell(
+          cellRange(0, 1, 1, 12),
+          { textFormat: { ...textColor('#ffffff'), bold: true, fontFamily: 'Cambria', fontSize: 18 } },
+          'userEnteredFormat(textFormat)',
+        ),
+        repeatCell(
+          cellRange(4, 5, 1, 12),
+          { ...background('#9bbcf0'), horizontalAlignment: 'CENTER', textFormat: { bold: true, fontFamily: 'Cambria', fontSize: 10 } },
+          'userEnteredFormat(backgroundColorStyle,horizontalAlignment,textFormat)',
+        ),
+        repeatCell(
+          cellRange(5, 6, 1, 12),
+          { ...background('#f8fafc'), horizontalAlignment: 'CENTER', textFormat: { bold: true, fontFamily: 'Cambria', fontSize: 12 } },
+          'userEnteredFormat(backgroundColorStyle,horizontalAlignment,textFormat)',
+        ),
+        ...sectionTitleRanges.map((range) =>
+          repeatCell(
+            range,
+            { ...background('#1f4e8c'), horizontalAlignment: 'CENTER', textFormat: { ...textColor('#ffffff'), bold: true, fontFamily: 'Cambria', fontSize: 12 } },
+            'userEnteredFormat(backgroundColorStyle,horizontalAlignment,textFormat)',
+          ),
+        ),
+        ...tableHeaderRanges.map((range) =>
+          repeatCell(
+            range,
+            { ...background('#a9c7f5'), horizontalAlignment: 'CENTER', textFormat: { bold: true, fontFamily: 'Cambria', fontSize: 10 } },
+            'userEnteredFormat(backgroundColorStyle,horizontalAlignment,textFormat)',
+          ),
+        ),
+        ...moneyRanges.map((range) =>
+          repeatCell(
+            range,
+            { numberFormat: { type: 'CURRENCY', pattern: 'R$ #,##0.00' } },
+            'userEnteredFormat.numberFormat',
+          ),
+        ),
+        ...[
+          cellRange(5, 6, 1, 2),
+          cellRange(5, 6, 3, 4),
+          cellRange(5, 6, 7, 8),
+        ].map((range) =>
+          repeatCell(
+            range,
+            { numberFormat: { type: 'NUMBER', pattern: '#,##0' } },
+            'userEnteredFormat.numberFormat',
+          ),
+        ),
+        repeatCell(
+          cellRange(5, 6, 11, 12),
+          { numberFormat: { type: 'DATE', pattern: 'dd/mm/yyyy' } },
+          'userEnteredFormat.numberFormat',
+        ),
+        mergeRange(0, 1, 1, 12),
+        mergeRange(1, 2, 1, 12),
+        mergeRange(2, 3, 1, 12),
+        mergeRange(8, 9, 1, 6),
+        mergeRange(8, 9, 7, 12),
+        mergeRange(17, 18, 1, 6),
+        mergeRange(17, 18, 7, 9),
+        mergeRange(29, 30, 1, 5),
+        mergeRange(29, 30, 7, 11),
+        mergeRange(47, 48, 1, 5),
+        mergeRange(47, 48, 7, 11),
+      ],
+    }),
+  })
+}
+
 async function repairDashboardValues(
   sheets: GoogleSheetsService,
   sheetName: string,
@@ -3343,7 +3596,7 @@ async function repairDashboardValues(
   const dataRows = values.slice(1).filter((row) => isClientDataRow(row || []))
   const processed = dataRows.length
 
-  await sheets.ensureRowCapacity(DASHBOARD_SHEET_NAME, 80)
+  await sheets.ensureRowCapacity(DASHBOARD_SHEET_NAME, 125)
   await sheets.ensureColumnCapacity(DASHBOARD_SHEET_NAME, 14)
   const dashboardProperties = await sheets.getSheetProperties(DASHBOARD_SHEET_NAME)
   const dashboardSheet = quoteSheetName(DASHBOARD_SHEET_NAME)
@@ -3532,6 +3785,8 @@ async function repairDashboardValues(
   const totalUpcomingAmount = totalMetric.upcomingAmount
   const overdueMetric = situationMetrics.get('Em atraso') || createMetric()
   const paidMetric = situationMetrics.get('Pago / quitado') || createMetric()
+  const emptyDashboardRow = (length: number) => Array.from({ length }, () => '')
+  const titleTail = emptyDashboardRow(10)
 
   if (!dryRun) {
     await sheets.request(':batchUpdate', {
@@ -3542,11 +3797,46 @@ async function repairDashboardValues(
             unmergeCells: {
               range: {
                 sheetId: dashboardProperties.sheetId,
-                startRowIndex: 8,
-                endRowIndex: 18,
-                startColumnIndex: 7,
-                endColumnIndex: 9,
+                startRowIndex: 0,
+                endRowIndex: 125,
+                startColumnIndex: 0,
+                endColumnIndex: 20,
               },
+            },
+          },
+          {
+            updateDimensionProperties: {
+              range: { sheetId: dashboardProperties.sheetId, dimension: 'COLUMNS', startIndex: 0, endIndex: 1 },
+              properties: { pixelSize: 34 },
+              fields: 'pixelSize',
+            },
+          },
+          {
+            updateDimensionProperties: {
+              range: { sheetId: dashboardProperties.sheetId, dimension: 'COLUMNS', startIndex: 1, endIndex: 2 },
+              properties: { pixelSize: 170 },
+              fields: 'pixelSize',
+            },
+          },
+          {
+            updateDimensionProperties: {
+              range: { sheetId: dashboardProperties.sheetId, dimension: 'COLUMNS', startIndex: 2, endIndex: 6 },
+              properties: { pixelSize: 120 },
+              fields: 'pixelSize',
+            },
+          },
+          {
+            updateDimensionProperties: {
+              range: { sheetId: dashboardProperties.sheetId, dimension: 'COLUMNS', startIndex: 6, endIndex: 7 },
+              properties: { pixelSize: 28 },
+              fields: 'pixelSize',
+            },
+          },
+          {
+            updateDimensionProperties: {
+              range: { sheetId: dashboardProperties.sheetId, dimension: 'COLUMNS', startIndex: 7, endIndex: 12 },
+              properties: { pixelSize: 135 },
+              fields: 'pixelSize',
             },
           },
         ],
@@ -3557,77 +3847,85 @@ async function repairDashboardValues(
       method: 'POST',
       body: JSON.stringify({
         ranges: [
-          `${dashboardSheet}!B10:F16`,
-          `${dashboardSheet}!H10:N16`,
-          `${dashboardSheet}!B20:F30`,
-          `${dashboardSheet}!H20:I25`,
-          `${dashboardSheet}!B30:E38`,
-          `${dashboardSheet}!H30:K38`,
-          `${dashboardSheet}!B49:E69`,
-          `${dashboardSheet}!H49:K56`,
+          `${dashboardSheet}!A1:T125`,
         ],
       }),
     })
 
     await sheets.batchUpdateValues([
       {
-        range: `${dashboardSheet}!B6:N6`,
-        values: [[
-          processed,
-          '',
-          overdueMetric.count,
-          '',
-          totalOpenAmount,
-          '',
-          paidMetric.count,
-          '',
-          totalUpcomingAmount,
-          '',
-          latestUpdateDate ? formatBrDate(latestUpdateDate) : '',
-          '',
-          '',
-        ]],
+        range: `${dashboardSheet}!B1:L3`,
+        values: [
+          ['Dashboard Financeiro | Indicador', ...titleTail],
+          ['Visão executiva de inadimplência, recebimentos e régua de cobrança', ...titleTail],
+          [`Atualizado automaticamente pela base ${sheetName} em ${timestamp}`, ...titleTail],
+        ],
+      },
+      {
+        range: `${dashboardSheet}!B5:L6`,
+        values: [
+          ['Clientes na base', '', 'Em atraso', '', 'Valor em aberto', '', 'Pagos / quitados', '', 'A vencer', '', 'Última atualização'],
+          [processed, '', overdueMetric.count, '', totalOpenAmount, '', paidMetric.count, '', totalUpcomingAmount, '', latestUpdateDate ? formatBrDate(latestUpdateDate) : ''],
+        ],
+      },
+      {
+        range: `${dashboardSheet}!B9:L9`,
+        values: [['Resumo por situação', '', '', '', '', '', 'Resumo por ano', '', '', '', '']],
+      },
+      {
+        range: `${dashboardSheet}!B18:I18`,
+        values: [['Régua de cobrança', '', '', '', '', '', 'Acompanhamento operacional']],
+      },
+      {
+        range: `${dashboardSheet}!B30:K30`,
+        values: [['Visão de carteira: matérias e valores', '', '', '', '', '', 'Distribuição da régua de cobrança', '', '', '']],
+      },
+      {
+        range: `${dashboardSheet}!B48:K48`,
+        values: [['Histórico mensal: em atraso x em dia', '', '', '', '', '', 'Evolução semanal da régua', '', '', '']],
       },
       {
         range: `${dashboardSheet}!B10:F16`,
-        values: [['Situacao', 'Qtd', 'Valor aberto', 'Valor pago', 'Valor a vencer'], ...situationRows],
+        values: [['Situação', 'Qtd', 'Valor aberto', 'Valor pago', 'Valor a vencer'], ...situationRows],
       },
       {
         range: `${dashboardSheet}!H10:L16`,
         values: [['Ano', 'Valor aberto', 'Valor pago', 'Valor a vencer', 'Em atraso'], ...yearRows, totalYearRow],
       },
       {
-        range: `${dashboardSheet}!B20:F30`,
+        range: `${dashboardSheet}!B19:F29`,
         values: [['Etapa', 'Qtd', 'Ativos', 'Inativos', 'Valor aberto'], ...reguaRows],
       },
       {
-        range: `${dashboardSheet}!H20:I25`,
+        range: `${dashboardSheet}!H19:I24`,
         values: [
           ['Indicador', 'Valor'],
-          ['Sem atualizacao hoje', Math.max(0, processed - updatedToday)],
+          ['Sem atualização hoje', Math.max(0, processed - updatedToday)],
           ['Clientes sem regua', (reguaMetrics.get('Sem regua') || createMetric()).count],
-          ['Em atraso sem acao', overdueWithoutAction],
+          ['Em atraso sem ação', overdueWithoutAction],
           ['Dias vencido medio', overdueDaysCount ? overdueDaysTotal / overdueDaysCount : 0],
           ['Maior atraso', maxOverdueDays],
         ],
       },
       {
-        range: `${dashboardSheet}!B30:E38`,
-        values: [['Materia', 'Casos', 'Grafico', 'Valor aberto'], ...matterRows],
+        range: `${dashboardSheet}!B31:E39`,
+        values: [['Matéria', 'Casos', 'Gráfico', 'Valor aberto'], ...matterRows],
       },
       {
-        range: `${dashboardSheet}!H30:K38`,
-        values: [['Etapa', 'Casos', 'Grafico', 'Valor aberto'], ...stageDistributionRows],
+        range: `${dashboardSheet}!H31:K39`,
+        values: [['Etapa', 'Casos', 'Gráfico', 'Valor aberto'], ...stageDistributionRows],
       },
       {
         range: `${dashboardSheet}!B49:E69`,
-        values: [['Mes', 'Em atraso', 'Em dia', 'Delta atraso'], ...monthlyRows],
+        values: [['Mês', 'Em atraso', 'Em dia', 'Delta atraso'], ...monthlyRows],
       },
       {
         range: `${dashboardSheet}!H49:K56`,
-        values: [['Etapa', 'Atual', 'Ultima medicao', 'Delta'], ...weeklyRows],
+        values: [['Etapa', 'Atual', 'Última medição', 'Delta'], ...weeklyRows],
       },
     ])
+
+    await applyDashboardModernLayout(sheets, dashboardProperties.sheetId)
 
     const metadata = await sheets.request('?fields=sheets(properties(sheetId,title),charts(chartId))')
     const dashboardSheetMetadata = (metadata.sheets || []).find(
@@ -3643,7 +3941,7 @@ async function repairDashboardValues(
             spec: dashboardPieChartSpec(dashboardProperties.sheetId),
             position: {
               overlayPosition: {
-                anchorCell: { sheetId: dashboardProperties.sheetId, rowIndex: 36, columnIndex: 6 },
+                anchorCell: { sheetId: dashboardProperties.sheetId, rowIndex: 71, columnIndex: 1 },
                 offsetXPixels: 10,
                 offsetYPixels: 8,
                 widthPixels: 440,
@@ -3659,10 +3957,10 @@ async function repairDashboardValues(
             spec: dashboardMonthlyLineChartSpec(dashboardProperties.sheetId),
             position: {
               overlayPosition: {
-                anchorCell: { sheetId: dashboardProperties.sheetId, rowIndex: 55, columnIndex: 1 },
+                anchorCell: { sheetId: dashboardProperties.sheetId, rowIndex: 71, columnIndex: 6 },
                 offsetXPixels: 10,
                 offsetYPixels: 8,
-                widthPixels: 520,
+                widthPixels: 560,
                 heightPixels: 320,
               },
             },
@@ -3675,10 +3973,10 @@ async function repairDashboardValues(
             spec: dashboardReguaBarChartSpec(dashboardProperties.sheetId),
             position: {
               overlayPosition: {
-                anchorCell: { sheetId: dashboardProperties.sheetId, rowIndex: 55, columnIndex: 6 },
+                anchorCell: { sheetId: dashboardProperties.sheetId, rowIndex: 92, columnIndex: 1 },
                 offsetXPixels: 10,
                 offsetYPixels: 8,
-                widthPixels: 520,
+                widthPixels: 760,
                 heightPixels: 320,
               },
             },
