@@ -75,7 +75,7 @@ type SheetCellValue = string | number | null
 type SheetValues = SheetCellValue[][]
 type AutomationBody = {
   dryRun?: boolean
-  maintenanceAction?: 'normalize_months' | 'repair_dashboard'
+  maintenanceAction?: 'normalize_months' | 'repair_dashboard' | 'sync_materia'
   normalizeLayout?: boolean
   maxRows?: number
   startRow?: number
@@ -181,6 +181,7 @@ type SheetClientRow = {
 type ColumnRole =
   | 'sourceCode'
   | 'fillDate'
+  | 'matter'
   | 'dueDate'
   | 'amount'
   | 'description'
@@ -657,6 +658,7 @@ function resolveColumnRole(header: string): ColumnRole | null {
 
   if (['COD_CL', 'CODIGO_CLIENTE', 'CODIGO_DO_CLIENTE'].includes(normalized)) return 'sourceCode'
   if (normalized === 'DATA') return 'fillDate'
+  if (['MATERIA', 'AREA', 'TIPO_DE_ACAO'].includes(normalized)) return 'matter'
   if (['VENCIMENTO', 'DATA_DE_VENCIMENTO', 'DT_VENCIMENTO'].includes(normalized)) return 'dueDate'
   if (['VALOR', 'VALOR_TOTAL', 'TOTAL'].includes(normalized)) return 'amount'
   if (['DESCRICAO', 'DESCRICAO_DA_PARCELA', 'PARCELA'].includes(normalized)) return 'description'
@@ -2546,6 +2548,7 @@ function computeColumnValue(
   executionDate: string,
   sourceCode: string,
   sourceDate: string,
+  sourceMatter: string,
   sources: string[],
   errorMessage: string,
   status: string,
@@ -2563,6 +2566,8 @@ function computeColumnValue(
       return sourceCode
     case 'fillDate':
       return sourceDate
+    case 'matter':
+      return sourceMatter
     case 'dueDate':
       return dueDate
     case 'amount':
@@ -2605,6 +2610,7 @@ function buildUpdatePlan(
   executionDate: string,
   sourceCode: string,
   sourceDate: string,
+  sourceMatter: string,
   sources: string[],
   errorMessage: string,
   status: string,
@@ -2631,6 +2637,7 @@ function buildUpdatePlan(
       executionDate,
       sourceCode,
       sourceDate,
+      sourceMatter,
       sources,
       errorMessage,
       status,
@@ -2887,6 +2894,129 @@ async function normalizeMonthlySheetLayout(
       errors: 0,
       matched: 0,
       processed: Math.max(findLastFilledRow(values) - 1, 0),
+      financial: {
+        openAmount: 0,
+        paidAmount: 0,
+        upcomingAmount: 0,
+      },
+      stageBreakdown: [],
+      recordStatusBreakdown: [],
+      actionBreakdown: [],
+    },
+  }
+}
+
+function resolveMatterSourceEntry(
+  lookup: ReturnType<typeof buildSheetAmountLookup>,
+  row: SheetClientRow,
+) {
+  const candidates = resolveSourceCandidatesForClient(lookup, row.normalizedName)
+  if (candidates.length === 0) return null
+
+  const currentCode = normalizeHeader(getCell(row.values, 5))
+  const currentAmount = parseAmount(getCell(row.values, SHEET_TOTAL_VALUE_COLUMN_INDEX))
+
+  if (currentCode) {
+    const codeMatches = candidates.filter((candidate) => normalizeHeader(candidate.code) === currentCode)
+    if (codeMatches.length === 1) return codeMatches[0]
+
+    if (codeMatches.length > 1 && currentAmount !== null) {
+      const amountMatches = codeMatches.filter((candidate) => amountsMatch(candidate.amount, currentAmount))
+      if (amountMatches.length === 1) return amountMatches[0]
+    }
+
+    return null
+  }
+
+  if (currentAmount !== null) {
+    const amountMatches = candidates.filter((candidate) => amountsMatch(candidate.amount, currentAmount))
+    if (amountMatches.length === 1) return amountMatches[0]
+  }
+
+  return candidates.length === 1 ? candidates[0] : null
+}
+
+async function syncMatterFromProspection(
+  sheets: GoogleSheetsService,
+  sheetName: string,
+  accessToken: string,
+  dryRun: boolean,
+): Promise<AutomationResult> {
+  const timestamp = buildTimestamp()
+  const values = await sheets.readSheetValues(sheetName)
+  const { rows, skipped } = buildSheetClientRows(values, 2, 0)
+  const sourceLookup = await loadValueSourceRows(accessToken, sheets.spreadsheetId, sheetName, values)
+  const updateRequests: Array<{ range: string; values: SheetValues }> = []
+  const preview: AutomationPreviewRow[] = []
+  let matched = 0
+  let notFound = 0
+
+  for (const row of rows) {
+    const sourceEntry = resolveMatterSourceEntry(sourceLookup, row)
+    const sourceMatter = sourceEntry?.matter?.trim() || ''
+
+    if (!sourceEntry || !sourceMatter) {
+      notFound += 1
+      continue
+    }
+
+    matched += 1
+    const currentMatter = getCell(row.values, 10)
+    if (compareValue(currentMatter) === compareValue(sourceMatter)) continue
+
+    updateRequests.push({
+      range: `${quoteSheetName(sheetName)}!J${row.rowNumber}`,
+      values: [[sourceMatter]],
+    })
+
+    if (preview.length < 100) {
+      preview.push({
+        rowNumber: row.rowNumber,
+        clientName: row.clientName,
+        action: dryRun ? 'matéria encontrada' : 'matéria sincronizada',
+        status: sourceMatter,
+        sources: ['Prospecção (PRD)'],
+        errorMessage: '',
+        cardUrl: '',
+      })
+    }
+  }
+
+  if (!dryRun) {
+    const batchSize = 200
+    for (let index = 0; index < updateRequests.length; index += batchSize) {
+      await sheets.batchUpdateValues(updateRequests.slice(index, index + batchSize))
+    }
+  }
+
+  return {
+    dryRun,
+    sheetName,
+    pdfFileName: '',
+    timestamp,
+    startRow: 2,
+    processed: rows.length,
+    skipped,
+    matched,
+    updated: dryRun ? 0 : updateRequests.length,
+    refreshed: 0,
+    ignored: Math.max(rows.length - matched, 0),
+    notFound,
+    errors: 0,
+    updatedCells: dryRun ? 0 : updateRequests.length,
+    logRows: 0,
+    preview,
+    pendingCount: 0,
+    pendingSelections: [],
+    dashboard: {
+      created: 0,
+      updated: dryRun ? 0 : updateRequests.length,
+      refreshed: 0,
+      pending: 0,
+      notFound,
+      errors: 0,
+      matched,
+      processed: rows.length,
       financial: {
         openAmount: 0,
         paidAmount: 0,
@@ -4075,6 +4205,10 @@ async function runAutomation(req: Request): Promise<AutomationResult> {
     return repairDashboardValues(sheets, sheetName, dryRun)
   }
 
+  if (body.maintenanceAction === 'sync_materia') {
+    return syncMatterFromProspection(sheets, sheetName, accessToken, dryRun)
+  }
+
   if (pdfRecords.length === 0) {
     const timestamp = buildTimestamp()
     const errorRows = [
@@ -4403,6 +4537,7 @@ async function runAutomation(req: Request): Promise<AutomationResult> {
 
         const sourceCode = sourceEntry?.code || getCell(workingRow.values, 5)
         const baseSourceDate = sourceEntry?.date || getCell(workingRow.values, 1)
+        const sourceMatter = sourceEntry?.matter || getCell(workingRow.values, 10)
         const sourceDueDay = sourceEntry?.dueDay || ''
         const sourceFinancialStatus = sourceEntry?.financialStatus || getCell(workingRow.values, 15)
         const totalAmount =
@@ -4455,6 +4590,7 @@ async function runAutomation(req: Request): Promise<AutomationResult> {
           executionDate,
           sourceCode,
           sourceDate,
+          sourceMatter,
           [...sources],
           errorParts.join(' | '),
           status,
@@ -4787,6 +4923,7 @@ async function runAutomation(req: Request): Promise<AutomationResult> {
     }
     const sourceCode = sourceEntry?.code || getCell(row.values, 5)
     const sourceDate = sourceEntry?.date || getCell(row.values, 1)
+    const sourceMatter = sourceEntry?.matter || getCell(row.values, 10)
     if (options.created) {
       addMonthSeparatorIfNeeded(row, sourceDate)
     }
@@ -4830,6 +4967,7 @@ async function runAutomation(req: Request): Promise<AutomationResult> {
       executionDate,
       sourceCode,
       sourceDate,
+      sourceMatter,
       [...sources],
       errorParts.join(' | '),
       status,
@@ -4992,6 +5130,7 @@ async function runAutomation(req: Request): Promise<AutomationResult> {
     }
     const sourceCode = sourceEntry?.code || getCell(row.values, 5)
     const sourceDate = sourceEntry?.date || getCell(row.values, 1)
+    const sourceMatter = sourceEntry?.matter || getCell(row.values, 10)
     const sourceDueDay = sourceEntry?.dueDay || ''
     const sourceFinancialStatus = sourceEntry?.financialStatus || getCell(row.values, 15)
     const totalAmount =
@@ -5031,6 +5170,7 @@ async function runAutomation(req: Request): Promise<AutomationResult> {
       executionDate,
       sourceCode,
       sourceDate,
+      sourceMatter,
       [...sources],
       errorParts.join(' | '),
       status,
