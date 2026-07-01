@@ -3598,6 +3598,29 @@ async function applyDashboardModernLayout(sheets: GoogleSheetsService, sheetId: 
     userEnteredFormat: Record<string, unknown>,
     fields: string,
   ) => ({ repeatCell: { range, cell: { userEnteredFormat }, fields } })
+  const border = (hex = '#9fb7d6') => ({
+    style: 'SOLID',
+    width: 1,
+    colorStyle: { rgbColor: hexToGoogleColor(hex) },
+  })
+  const tableBorder = (range: ReturnType<typeof cellRange>) => ({
+    updateBorders: {
+      range,
+      top: border('#6f8fb8'),
+      bottom: border('#6f8fb8'),
+      left: border('#6f8fb8'),
+      right: border('#6f8fb8'),
+      innerHorizontal: border('#b8cbe4'),
+      innerVertical: border('#b8cbe4'),
+    },
+  })
+  const rowHeight = (startIndex: number, endIndex: number, pixelSize: number) => ({
+    updateDimensionProperties: {
+      range: { sheetId, dimension: 'ROWS', startIndex, endIndex },
+      properties: { pixelSize },
+      fields: 'pixelSize',
+    },
+  })
   const mergeRange = (startRowIndex: number, endRowIndex: number, startColumnIndex: number, endColumnIndex: number) => ({
     mergeCells: {
       range: cellRange(startRowIndex, endRowIndex, startColumnIndex, endColumnIndex),
@@ -3633,19 +3656,56 @@ async function applyDashboardModernLayout(sheets: GoogleSheetsService, sheetId: 
     cellRange(31, 39, 4, 5),
     cellRange(31, 39, 10, 11),
   ]
+  const tableRanges = [
+    cellRange(4, 6, 1, 12),
+    cellRange(8, 16, 1, 6),
+    cellRange(8, 16, 7, 12),
+    cellRange(17, 29, 1, 6),
+    cellRange(17, 24, 7, 9),
+    cellRange(29, 39, 1, 5),
+    cellRange(29, 39, 7, 11),
+    cellRange(47, 69, 1, 5),
+    cellRange(47, 56, 7, 11),
+  ]
 
   await sheets.request(':batchUpdate', {
     method: 'POST',
     body: JSON.stringify({
       requests: [
+        {
+          updateSheetProperties: {
+            properties: {
+              sheetId,
+              gridProperties: {
+                frozenRowCount: 3,
+                hideGridlines: true,
+              },
+            },
+            fields: 'gridProperties.frozenRowCount,gridProperties.hideGridlines',
+          },
+        },
+        rowHeight(0, 1, 34),
+        rowHeight(1, 3, 24),
+        rowHeight(4, 6, 34),
+        rowHeight(8, 10, 28),
+        rowHeight(17, 19, 28),
+        rowHeight(29, 31, 28),
+        rowHeight(47, 49, 28),
+        rowHeight(10, 69, 24),
         repeatCell(
-          cellRange(0, 110, 0, 12),
-          { ...background('#eaf2ff'), horizontalAlignment: 'CENTER', verticalAlignment: 'MIDDLE', textFormat: { fontFamily: 'Cambria', fontSize: 10 } },
-          'userEnteredFormat(backgroundColorStyle,horizontalAlignment,verticalAlignment,textFormat)',
+          cellRange(0, 125, 0, 14),
+          {
+            ...background('#eef5ff'),
+            horizontalAlignment: 'CENTER',
+            verticalAlignment: 'MIDDLE',
+            wrapStrategy: 'WRAP',
+            textFormat: { fontFamily: 'Cambria', fontSize: 10 },
+          },
+          'userEnteredFormat(backgroundColorStyle,horizontalAlignment,verticalAlignment,wrapStrategy,textFormat)',
         ),
         repeatCell(
           cellRange(0, 3, 1, 12),
-          { ...background('#0f172a'), horizontalAlignment: 'CENTER', verticalAlignment: 'MIDDLE', textFormat: { ...textColor('#ffffff'), bold: true, fontFamily: 'Cambria', fontSize: 12 } },
+          { ...background('#0b1f3a'), horizontalAlignment: 'CENTER', verticalAlignment: 'MIDDLE', textFormat: { ...textColor('#ffffff'), bold: true, fontFamily: 'Cambria', fontSize: 12 } },
           'userEnteredFormat(backgroundColorStyle,horizontalAlignment,verticalAlignment,textFormat)',
         ),
         repeatCell(
@@ -3655,27 +3715,32 @@ async function applyDashboardModernLayout(sheets: GoogleSheetsService, sheetId: 
         ),
         repeatCell(
           cellRange(4, 5, 1, 12),
-          { ...background('#9bbcf0'), horizontalAlignment: 'CENTER', textFormat: { bold: true, fontFamily: 'Cambria', fontSize: 10 } },
+          { ...background('#d9e8ff'), horizontalAlignment: 'CENTER', textFormat: { ...textColor('#0b1f3a'), bold: true, fontFamily: 'Cambria', fontSize: 10 } },
           'userEnteredFormat(backgroundColorStyle,horizontalAlignment,textFormat)',
         ),
         repeatCell(
           cellRange(5, 6, 1, 12),
-          { ...background('#f8fafc'), horizontalAlignment: 'CENTER', textFormat: { bold: true, fontFamily: 'Cambria', fontSize: 12 } },
+          { ...background('#ffffff'), horizontalAlignment: 'CENTER', textFormat: { ...textColor('#0b1f3a'), bold: true, fontFamily: 'Cambria', fontSize: 13 } },
           'userEnteredFormat(backgroundColorStyle,horizontalAlignment,textFormat)',
         ),
         ...sectionTitleRanges.map((range) =>
           repeatCell(
             range,
-            { ...background('#1f4e8c'), horizontalAlignment: 'CENTER', textFormat: { ...textColor('#ffffff'), bold: true, fontFamily: 'Cambria', fontSize: 12 } },
+            { ...background('#164f8f'), horizontalAlignment: 'CENTER', textFormat: { ...textColor('#ffffff'), bold: true, fontFamily: 'Cambria', fontSize: 12 } },
             'userEnteredFormat(backgroundColorStyle,horizontalAlignment,textFormat)',
           ),
         ),
         ...tableHeaderRanges.map((range) =>
           repeatCell(
             range,
-            { ...background('#a9c7f5'), horizontalAlignment: 'CENTER', textFormat: { bold: true, fontFamily: 'Cambria', fontSize: 10 } },
+            { ...background('#cfe0f7'), horizontalAlignment: 'CENTER', textFormat: { ...textColor('#0b1f3a'), bold: true, fontFamily: 'Cambria', fontSize: 10 } },
             'userEnteredFormat(backgroundColorStyle,horizontalAlignment,textFormat)',
           ),
+        ),
+        repeatCell(
+          cellRange(10, 69, 1, 12),
+          { ...background('#ffffff'), textFormat: { ...textColor('#0f172a'), fontFamily: 'Cambria', fontSize: 10 } },
+          'userEnteredFormat(backgroundColorStyle,textFormat)',
         ),
         ...moneyRanges.map((range) =>
           repeatCell(
@@ -3711,6 +3776,7 @@ async function applyDashboardModernLayout(sheets: GoogleSheetsService, sheetId: 
         mergeRange(29, 30, 7, 11),
         mergeRange(47, 48, 1, 5),
         mergeRange(47, 48, 7, 11),
+        ...tableRanges.map((range) => tableBorder(range)),
       ],
     }),
   })
@@ -3937,21 +4003,21 @@ async function repairDashboardValues(
           {
             updateDimensionProperties: {
               range: { sheetId: dashboardProperties.sheetId, dimension: 'COLUMNS', startIndex: 0, endIndex: 1 },
-              properties: { pixelSize: 34 },
+              properties: { pixelSize: 28 },
               fields: 'pixelSize',
             },
           },
           {
             updateDimensionProperties: {
               range: { sheetId: dashboardProperties.sheetId, dimension: 'COLUMNS', startIndex: 1, endIndex: 2 },
-              properties: { pixelSize: 170 },
+              properties: { pixelSize: 220 },
               fields: 'pixelSize',
             },
           },
           {
             updateDimensionProperties: {
               range: { sheetId: dashboardProperties.sheetId, dimension: 'COLUMNS', startIndex: 2, endIndex: 6 },
-              properties: { pixelSize: 120 },
+              properties: { pixelSize: 132 },
               fields: 'pixelSize',
             },
           },
@@ -3965,7 +4031,14 @@ async function repairDashboardValues(
           {
             updateDimensionProperties: {
               range: { sheetId: dashboardProperties.sheetId, dimension: 'COLUMNS', startIndex: 7, endIndex: 12 },
-              properties: { pixelSize: 135 },
+              properties: { pixelSize: 142 },
+              fields: 'pixelSize',
+            },
+          },
+          {
+            updateDimensionProperties: {
+              range: { sheetId: dashboardProperties.sheetId, dimension: 'COLUMNS', startIndex: 12, endIndex: 14 },
+              properties: { pixelSize: 128 },
               fields: 'pixelSize',
             },
           },

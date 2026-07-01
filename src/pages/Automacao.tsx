@@ -132,7 +132,7 @@ type SelectedProcessMatchPayload = ManualProcessAdjustment & {
 
 type AutomationRequestPayload = {
   dryRun: boolean;
-  maintenanceAction?: 'normalize_months';
+  maintenanceAction?: 'normalize_months' | 'repair_dashboard';
   normalizeLayout?: boolean;
   sheetName?: string;
   pdfFileName?: string;
@@ -850,6 +850,45 @@ export default function Automacao() {
     },
   });
 
+  const dashboardRepairMutation = useMutation({
+    mutationFn: async () => {
+      setAutomationProgress({
+        phase: 'processing',
+        percent: 0,
+        label: 'Recriando dashboard da planilha...',
+      });
+
+      return runAutomationRequest({
+        dryRun: false,
+        maintenanceAction: 'repair_dashboard',
+        sheetName: sheetName.trim() || undefined,
+        pdfRecords: [],
+      });
+    },
+    onSuccess: (data) => {
+      setLastResult(data);
+      setAutomationProgress({
+        phase: 'complete',
+        percent: 100,
+        current: data.processed,
+        total: data.processed,
+        label: 'Dashboard corrigido',
+      });
+      toast({
+        title: 'Dashboard corrigido',
+        description: 'A aba de indicador foi reorganizada com blocos, bordas e graficos atualizados.',
+      });
+    },
+    onError: (error) => {
+      setAutomationProgress(null);
+      toast({
+        title: 'Nao foi possivel corrigir o dashboard',
+        description: getErrorMessage(error),
+        variant: 'destructive',
+      });
+    },
+  });
+
   const allPendingSelectionsFilled = useMemo(
     () =>
       pendingSelections.every((selection) => {
@@ -1171,6 +1210,7 @@ export default function Automacao() {
               disabled={
                 automationMutation.isPending ||
                 maintenanceMutation.isPending ||
+                dashboardRepairMutation.isPending ||
                 pdfLoading ||
                 selectedAutomationRecords.length === 0 ||
                 selectionExceedsSafeLimit
@@ -1198,7 +1238,7 @@ export default function Automacao() {
               type="button"
               variant="outline"
               className="h-11 w-full rounded-xl border-border/70 bg-background/60"
-              disabled={automationMutation.isPending || maintenanceMutation.isPending || pdfLoading}
+              disabled={automationMutation.isPending || maintenanceMutation.isPending || dashboardRepairMutation.isPending || pdfLoading}
               onClick={() => maintenanceMutation.mutate()}
             >
               {maintenanceMutation.isPending ? (
@@ -1208,6 +1248,23 @@ export default function Automacao() {
                 </>
               ) : (
                 'Corrigir organização mensal'
+              )}
+            </Button>
+
+            <Button
+              type="button"
+              variant="outline"
+              className="h-11 w-full rounded-xl border-border/70 bg-background/60"
+              disabled={automationMutation.isPending || maintenanceMutation.isPending || dashboardRepairMutation.isPending || pdfLoading}
+              onClick={() => dashboardRepairMutation.mutate()}
+            >
+              {dashboardRepairMutation.isPending ? (
+                <>
+                  <RefreshCw className="mr-2 h-4 w-4 animate-spin" />
+                  Corrigindo dashboard...
+                </>
+              ) : (
+                'Corrigir dashboard'
               )}
             </Button>
 
