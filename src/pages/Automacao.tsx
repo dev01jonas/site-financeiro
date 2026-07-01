@@ -131,7 +131,7 @@ type SelectedProcessMatchPayload = ManualProcessAdjustment & {
 
 type AutomationRequestPayload = {
   dryRun: boolean;
-  maintenanceAction?: 'normalize_months' | 'repair_dashboard';
+  maintenanceAction?: 'normalize_months';
   normalizeLayout?: boolean;
   sheetName?: string;
   pdfFileName?: string;
@@ -748,45 +748,6 @@ export default function Automacao() {
     },
   });
 
-  const dashboardRepairMutation = useMutation({
-    mutationFn: async () => {
-      setAutomationProgress({
-        phase: 'processing',
-        percent: 0,
-        label: 'Corrigindo fórmulas e gráficos do dashboard...',
-      });
-
-      return runAutomationRequest({
-        dryRun: false,
-        maintenanceAction: 'repair_dashboard',
-        sheetName: sheetName.trim() || undefined,
-        pdfRecords: [],
-      });
-    },
-    onSuccess: (data) => {
-      setLastResult(data);
-      setAutomationProgress({
-        phase: 'complete',
-        percent: 100,
-        current: data.processed,
-        total: data.processed,
-        label: 'Dashboard corrigido',
-      });
-      toast({
-        title: 'Dashboard corrigido',
-        description: 'As fórmulas e os gráficos do Dashboard Moderno foram atualizados com a base completa.',
-      });
-    },
-    onError: (error) => {
-      setAutomationProgress(null);
-      toast({
-        title: 'Não foi possível corrigir o dashboard',
-        description: getErrorMessage(error),
-        variant: 'destructive',
-      });
-    },
-  });
-
   const allPendingSelectionsFilled = useMemo(
     () =>
       pendingSelections.every((selection) => {
@@ -991,7 +952,7 @@ export default function Automacao() {
             <Button
               type="button"
               className="h-11 w-full rounded-xl bg-[linear-gradient(135deg,hsl(var(--primary)),hsl(216_48%_34%))]"
-              disabled={automationMutation.isPending || maintenanceMutation.isPending || dashboardRepairMutation.isPending || pdfLoading}
+              disabled={automationMutation.isPending || maintenanceMutation.isPending || pdfLoading}
               onClick={() => {
                 setSelectedProcessMatches({});
                 setManualProcessAdjustments({});
@@ -1015,7 +976,7 @@ export default function Automacao() {
               type="button"
               variant="outline"
               className="h-11 w-full rounded-xl border-border/70 bg-background/60"
-              disabled={automationMutation.isPending || maintenanceMutation.isPending || dashboardRepairMutation.isPending || pdfLoading}
+              disabled={automationMutation.isPending || maintenanceMutation.isPending || pdfLoading}
               onClick={() => maintenanceMutation.mutate()}
             >
               {maintenanceMutation.isPending ? (
@@ -1028,22 +989,6 @@ export default function Automacao() {
               )}
             </Button>
 
-            <Button
-              type="button"
-              variant="outline"
-              className="h-11 w-full rounded-xl border-border/70 bg-background/60"
-              disabled={automationMutation.isPending || maintenanceMutation.isPending || dashboardRepairMutation.isPending || pdfLoading}
-              onClick={() => dashboardRepairMutation.mutate()}
-            >
-              {dashboardRepairMutation.isPending ? (
-                <>
-                  <RefreshCw className="mr-2 h-4 w-4 animate-spin" />
-                  Corrigindo dashboard...
-                </>
-              ) : (
-                'Corrigir dashboard'
-              )}
-            </Button>
           </CardContent>
         </Card>
 
