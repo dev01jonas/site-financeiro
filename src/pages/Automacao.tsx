@@ -34,6 +34,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Progress } from '@/components/ui/progress';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 
 type AutomationPreviewRow = {
   rowNumber: number | null;
@@ -155,6 +156,7 @@ type AutomationProgress = {
 };
 
 const AUTOMATION_BATCH_SIZE = 15;
+const AUTOMATION_SAFE_RECORD_LIMIT = 1500;
 
 function getErrorMessage(error: unknown) {
   if (error instanceof Error) return error.message;
@@ -486,6 +488,30 @@ function formatCompactCurrency(value: number) {
   return formatCurrency(value);
 }
 
+function formatInteger(value: number) {
+  return value.toLocaleString('pt-BR');
+}
+
+function getRecordYear(record: ExtractedRecord) {
+  const match = String(record.dueDate || '').match(/\b(\d{4})$/);
+  return match?.[1] || 'Sem ano';
+}
+
+function getRecordStatus(record: ExtractedRecord) {
+  return String(record.status || '').trim() || 'Sem status';
+}
+
+function parsePositiveInteger(value: string) {
+  const parsed = Number.parseInt(value, 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+}
+
+function getSortedRecordYears(records: ExtractedRecord[]) {
+  return [...new Set(records.map(getRecordYear))]
+    .filter((year) => year !== 'Sem ano')
+    .sort((a, b) => Number(b) - Number(a));
+}
+
 function incrementMetric(map: Map<string, number>, label: string) {
   if (!label) return;
   map.set(label, (map.get(label) || 0) + 1);
@@ -543,6 +569,10 @@ export default function Automacao() {
   const [sheetName, setSheetName] = useState('');
   const [pdfFileName, setPdfFileName] = useState('');
   const [pdfRecords, setPdfRecords] = useState<ExtractedRecord[]>([]);
+  const [recordYearFilter, setRecordYearFilter] = useState('all');
+  const [recordStatusFilter, setRecordStatusFilter] = useState('all');
+  const [recordRangeStart, setRecordRangeStart] = useState('');
+  const [recordRangeEnd, setRecordRangeEnd] = useState('');
   const [pdfLoading, setPdfLoading] = useState(false);
   const [lastResult, setLastResult] = useState<AutomationResult | null>(null);
   const [pendingSelections, setPendingSelections] = useState<PendingProcessSelection[]>([]);
@@ -565,13 +595,23 @@ export default function Automacao() {
 
     try {
       const records = await extractBillingRecords(file);
+      const years = getSortedRecordYears(records);
+      const defaultYear = records.length > AUTOMATION_SAFE_RECORD_LIMIT && years[0] ? years[0] : 'all';
+      const defaultYearCount =
+        defaultYear === 'all' ? records.length : records.filter((record) => getRecordYear(record) === defaultYear).length;
+
       setPdfRecords(records);
+      setRecordYearFilter(defaultYear);
+      setRecordStatusFilter('all');
+      setRecordRangeStart(defaultYearCount > AUTOMATION_SAFE_RECORD_LIMIT ? '1' : '');
+      setRecordRangeEnd(defaultYearCount > AUTOMATION_SAFE_RECORD_LIMIT ? String(AUTOMATION_SAFE_RECORD_LIMIT) : '');
+      setLastResult(null);
       setAutomationProgress({
         phase: 'complete',
         percent: 100,
         current: records.length,
         total: records.length,
-        label: `${records.length} registro(s) carregado(s) do Excel`,
+        label: `${formatInteger(records.length)} registro(s) carregado(s) do Excel`,
       });
       toast({
         title: 'Excel processado',
@@ -579,6 +619,10 @@ export default function Automacao() {
       });
     } catch (error) {
       setPdfRecords([]);
+      setRecordYearFilter('all');
+      setRecordStatusFilter('all');
+      setRecordRangeStart('');
+      setRecordRangeEnd('');
       setAutomationProgress(null);
       toast({
         title: 'Não foi possível ler o Excel',
@@ -632,10 +676,68 @@ export default function Automacao() {
     return payload;
   };
 
+  const availableYears = useMemo(() => getSortedRecordYears(pdfRecords), [pdfRecords]);
+
+  const availableStatuses = useMemo(() => {
+    const statusOrder = ['A vencer', 'Vencido', 'Pago', 'Quitado', 'Em atraso', 'Sem status'];
+    const statuses = [...new Set(pdfRecords.map(getRecordStatus))];
+
+    return statuses.sort((left, right) => {
+      const leftIndex = statusOrder.indexOf(left);
+      const rightIndex = statusOrder.indexOf(right);
+
+      if (leftIndex !== -1 || rightIndex !== -1) {
+        return (leftIndex === -1 ? Number.MAX_SAFE_INTEGER : leftIndex) - (rightIndex === -1 ? Number.MAX_SAFE_INTEGER : rightIndex);
+      }
+
+      return left.localeCompare(right, 'pt-BR');
+    });
+  }, [pdfRecords]);
+
+  const recordsAfterFilters = useMemo(
+    () =>
+      pdfRecords.filter((record) => {
+        const matchesYear = recordYearFilter === 'all' || getRecordYear(record) === recordYearFilter;
+        const matchesStatus = recordStatusFilter === 'all' || getRecordStatus(record) === recordStatusFilter;
+        return matchesYear && matchesStatus;
+      }),
+    [pdfRecords, recordStatusFilter, recordYearFilter],
+  );
+
+  const selectedAutomationRecords = useMemo(() => {
+    if (recordsAfterFilters.length === 0) return [];
+
+    const start = parsePositiveInteger(recordRangeStart);
+    const end = parsePositiveInteger(recordRangeEnd);
+    const startIndex = Math.max((start || 1) - 1, 0);
+    const endIndex = Math.min(end || recordsAfterFilters.length, recordsAfterFilters.length);
+
+    if (endIndex <= startIndex) return [];
+
+    return recordsAfterFilters.slice(startIndex, endIndex);
+  }, [recordRangeEnd, recordRangeStart, recordsAfterFilters]);
+
+  const selectedBatchCount = Math.ceil(selectedAutomationRecords.length / AUTOMATION_BATCH_SIZE);
+  const selectionExceedsSafeLimit = selectedAutomationRecords.length > AUTOMATION_SAFE_RECORD_LIMIT;
+  const selectedScopeLabel =
+    pdfRecords.length === 0
+      ? 'Nenhum arquivo carregado'
+      : `${formatInteger(selectedAutomationRecords.length)} de ${formatInteger(pdfRecords.length)} registro(s) selecionado(s)`;
+
   const automationMutation = useMutation({
     mutationFn: async (confirmation: AutomationMutationPayload = {}) => {
       if (pdfRecords.length === 0) {
         throw new Error('Selecione um Excel válido antes de executar a automação.');
+      }
+
+      if (selectedAutomationRecords.length === 0) {
+        throw new Error('O recorte escolhido nao tem registros para executar.');
+      }
+
+      if (selectionExceedsSafeLimit) {
+        throw new Error(
+          `Esse recorte tem ${formatInteger(selectedAutomationRecords.length)} registros. Reduza para no maximo ${formatInteger(AUTOMATION_SAFE_RECORD_LIMIT)} por execucao.`,
+        );
       }
 
       const selectedMatches = confirmation.selectedMatches || {};
@@ -643,14 +745,14 @@ export default function Automacao() {
         phase: 'processing',
         percent: 0,
         current: 0,
-        total: pdfRecords.length,
+        total: selectedAutomationRecords.length,
         label: 'Preparando execução da automação...',
       });
       const payload = {
         dryRun,
         sheetName: sheetName.trim() || undefined,
         pdfFileName: pdfFileName || undefined,
-        pdfRecords,
+        pdfRecords: selectedAutomationRecords,
         allowFallbackSelections: confirmation.allowFallbackSelections === true,
         selectedProcessMatches: selectedMatches,
       };
@@ -900,7 +1002,7 @@ export default function Automacao() {
                   {pdfLoading
                     ? 'Lendo Excel...'
                     : pdfFileName
-                      ? `${pdfFileName} (${pdfRecords.length} registro(s))`
+                      ? `${pdfFileName} (${formatInteger(pdfRecords.length)} registro(s))`
                       : 'Selecionar arquivo .xls ou .xlsx'}
                 </span>
                 <span className="rounded-lg bg-primary/10 p-2 text-primary">
@@ -928,6 +1030,120 @@ export default function Automacao() {
               ) : null}
             </div>
 
+            {pdfRecords.length > 0 ? (
+              <div className="space-y-4 rounded-2xl border border-border/70 bg-background/80 p-4">
+                <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                  <div className="space-y-1">
+                    <Label>Escopo da execucao</Label>
+                    <p className="text-xs leading-5 text-muted-foreground">
+                      Escolha qual parte do Excel sera enviada para Integra, Trello e planilha.
+                    </p>
+                  </div>
+                  <Badge variant={selectionExceedsSafeLimit ? 'destructive' : 'secondary'} className="w-fit rounded-xl px-3 py-1">
+                    {selectedScopeLabel}
+                  </Badge>
+                </div>
+
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <div className="space-y-2">
+                    <Label htmlFor="record-year-filter">Ano</Label>
+                    <Select
+                      value={recordYearFilter}
+                      onValueChange={(value) => {
+                        setRecordYearFilter(value);
+                        setRecordRangeStart('');
+                        setRecordRangeEnd('');
+                      }}
+                    >
+                      <SelectTrigger id="record-year-filter" className="h-11 rounded-xl border-border/70 bg-background/80">
+                        <SelectValue placeholder="Todos os anos" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="all">Todos os anos</SelectItem>
+                        {availableYears.map((year) => (
+                          <SelectItem key={year} value={year}>
+                            {year}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+
+                  <div className="space-y-2">
+                    <Label htmlFor="record-status-filter">Status</Label>
+                    <Select
+                      value={recordStatusFilter}
+                      onValueChange={(value) => {
+                        setRecordStatusFilter(value);
+                        setRecordRangeStart('');
+                        setRecordRangeEnd('');
+                      }}
+                    >
+                      <SelectTrigger id="record-status-filter" className="h-11 rounded-xl border-border/70 bg-background/80">
+                        <SelectValue placeholder="Todos os status" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="all">Todos os status</SelectItem>
+                        {availableStatuses.map((status) => (
+                          <SelectItem key={status} value={status}>
+                            {status}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </div>
+
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <div className="space-y-2">
+                    <Label htmlFor="record-range-start">Do registro</Label>
+                    <Input
+                      id="record-range-start"
+                      type="number"
+                      min={1}
+                      value={recordRangeStart}
+                      onChange={(event) => setRecordRangeStart(event.target.value)}
+                      placeholder="1"
+                      className="h-11 rounded-xl border-border/70 bg-background/80"
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="record-range-end">Ate o registro</Label>
+                    <Input
+                      id="record-range-end"
+                      type="number"
+                      min={1}
+                      value={recordRangeEnd}
+                      onChange={(event) => setRecordRangeEnd(event.target.value)}
+                      placeholder={String(Math.min(recordsAfterFilters.length || AUTOMATION_SAFE_RECORD_LIMIT, AUTOMATION_SAFE_RECORD_LIMIT))}
+                      className="h-11 rounded-xl border-border/70 bg-background/80"
+                    />
+                  </div>
+                </div>
+
+                <div className="grid gap-3 rounded-xl border border-border/70 bg-muted/20 p-3 text-xs text-muted-foreground sm:grid-cols-3">
+                  <div>
+                    <span className="block font-medium text-foreground">{formatInteger(recordsAfterFilters.length)}</span>
+                    Apos filtros
+                  </div>
+                  <div>
+                    <span className="block font-medium text-foreground">{formatInteger(selectedAutomationRecords.length)}</span>
+                    Serao processados
+                  </div>
+                  <div>
+                    <span className="block font-medium text-foreground">{formatInteger(selectedBatchCount)}</span>
+                    Lote(s) de {AUTOMATION_BATCH_SIZE}
+                  </div>
+                </div>
+
+                {selectionExceedsSafeLimit ? (
+                  <div className="rounded-xl border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs leading-5 text-amber-200">
+                    Esse recorte esta grande demais para uma rodada. Reduza o intervalo para ate {formatInteger(AUTOMATION_SAFE_RECORD_LIMIT)} registros.
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
+
             <div className="flex items-center justify-between gap-4 rounded-2xl border border-border/70 bg-background/80 p-4">
               <div className="space-y-1">
                 <Label htmlFor="dry-run">Modo teste</Label>
@@ -952,7 +1168,13 @@ export default function Automacao() {
             <Button
               type="button"
               className="h-11 w-full rounded-xl bg-[linear-gradient(135deg,hsl(var(--primary)),hsl(216_48%_34%))]"
-              disabled={automationMutation.isPending || maintenanceMutation.isPending || pdfLoading}
+              disabled={
+                automationMutation.isPending ||
+                maintenanceMutation.isPending ||
+                pdfLoading ||
+                selectedAutomationRecords.length === 0 ||
+                selectionExceedsSafeLimit
+              }
               onClick={() => {
                 setSelectedProcessMatches({});
                 setManualProcessAdjustments({});
