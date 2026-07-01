@@ -518,6 +518,31 @@ function formatCurrency(value: number | null) {
   return `R$ ${value.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
 }
 
+function normalizeDashboardMatterLabel(value: string) {
+  const cleaned = String(value || '')
+    .replace(/\s*\/\s*/g, '/')
+    .replace(/\s+/g, ' ')
+    .trim()
+
+  if (!cleaned) return 'Sem materia'
+
+  return cleaned
+    .split('/')
+    .map((part) => {
+      const text = part.trim()
+      if (!text) return ''
+      const lower = text.toLocaleLowerCase('pt-BR')
+      if (lower === 'adm') return 'Adm'
+      if (lower === 'prev' || lower === 'previden' || lower === 'previdenciario') return 'Prev'
+      if (lower === 'civel' || lower === 'civil') return 'Civil'
+      if (lower === 'criminal') return 'Criminal'
+      if (lower === 'penal') return 'Penal'
+      return text.charAt(0).toLocaleUpperCase('pt-BR') + text.slice(1).toLocaleLowerCase('pt-BR')
+    })
+    .filter(Boolean)
+    .join(' / ')
+}
+
 function sheetNumber(value: number | null) {
   return value !== null && Number.isFinite(value) ? value : ''
 }
@@ -3122,7 +3147,7 @@ function dashboardMonthlyLineChartSpec(sheetId: number) {
         {
           domain: {
             sourceRange: {
-              sources: [gridRange(sheetId, 48, 69, 1, 2)],
+              sources: [gridRange(sheetId, 50, 71, 1, 2)],
             },
           },
         },
@@ -3131,7 +3156,7 @@ function dashboardMonthlyLineChartSpec(sheetId: number) {
         {
           series: {
             sourceRange: {
-              sources: [gridRange(sheetId, 48, 69, 2, 3)],
+              sources: [gridRange(sheetId, 50, 71, 2, 3)],
             },
           },
           targetAxis: 'LEFT_AXIS',
@@ -3140,7 +3165,7 @@ function dashboardMonthlyLineChartSpec(sheetId: number) {
         {
           series: {
             sourceRange: {
-              sources: [gridRange(sheetId, 48, 69, 3, 4)],
+              sources: [gridRange(sheetId, 50, 71, 3, 4)],
             },
           },
           targetAxis: 'LEFT_AXIS',
@@ -3166,7 +3191,7 @@ function dashboardReguaBarChartSpec(sheetId: number) {
         {
           domain: {
             sourceRange: {
-              sources: [gridRange(sheetId, 19, 29, 1, 2)],
+              sources: [gridRange(sheetId, 18, 29, 1, 2)],
             },
           },
         },
@@ -3175,7 +3200,7 @@ function dashboardReguaBarChartSpec(sheetId: number) {
         {
           series: {
             sourceRange: {
-              sources: [gridRange(sheetId, 19, 29, 2, 3)],
+              sources: [gridRange(sheetId, 18, 29, 2, 3)],
             },
           },
           targetAxis: 'BOTTOM_AXIS',
@@ -3631,41 +3656,41 @@ async function applyDashboardModernLayout(sheets: GoogleSheetsService, sheetId: 
     cellRange(8, 9, 1, 6),
     cellRange(8, 9, 7, 12),
     cellRange(17, 18, 1, 6),
-    cellRange(17, 18, 7, 9),
-    cellRange(29, 30, 1, 5),
-    cellRange(29, 30, 7, 11),
-    cellRange(47, 48, 1, 5),
-    cellRange(47, 48, 7, 11),
+    cellRange(17, 18, 7, 11),
+    cellRange(30, 31, 1, 6),
+    cellRange(30, 31, 7, 12),
+    cellRange(49, 50, 1, 5),
+    cellRange(49, 50, 7, 11),
   ]
   const tableHeaderRanges = [
     cellRange(9, 10, 1, 6),
     cellRange(9, 10, 7, 12),
     cellRange(18, 19, 1, 6),
-    cellRange(18, 19, 7, 9),
-    cellRange(30, 31, 1, 5),
-    cellRange(30, 31, 7, 11),
-    cellRange(48, 49, 1, 5),
-    cellRange(48, 49, 7, 11),
+    cellRange(18, 19, 7, 11),
+    cellRange(31, 32, 1, 6),
+    cellRange(31, 32, 7, 12),
+    cellRange(50, 51, 1, 5),
+    cellRange(50, 51, 7, 11),
   ]
   const moneyRanges = [
     cellRange(5, 6, 5, 6),
-    cellRange(5, 6, 9, 10),
+    cellRange(5, 6, 10, 11),
     cellRange(10, 16, 3, 6),
     cellRange(10, 16, 8, 11),
     cellRange(19, 29, 5, 6),
-    cellRange(31, 39, 4, 5),
-    cellRange(31, 39, 10, 11),
+    cellRange(32, 47, 5, 6),
+    cellRange(32, 42, 11, 12),
   ]
   const tableRanges = [
-    cellRange(4, 6, 1, 12),
+    cellRange(4, 6, 1, 14),
     cellRange(8, 16, 1, 6),
     cellRange(8, 16, 7, 12),
     cellRange(17, 29, 1, 6),
-    cellRange(17, 24, 7, 9),
-    cellRange(29, 39, 1, 5),
-    cellRange(29, 39, 7, 11),
-    cellRange(47, 69, 1, 5),
-    cellRange(47, 56, 7, 11),
+    cellRange(17, 29, 7, 11),
+    cellRange(30, 47, 1, 6),
+    cellRange(30, 42, 7, 12),
+    cellRange(49, 71, 1, 5),
+    cellRange(49, 61, 7, 11),
   ]
 
   await sheets.request(':batchUpdate', {
@@ -3689,9 +3714,9 @@ async function applyDashboardModernLayout(sheets: GoogleSheetsService, sheetId: 
         rowHeight(4, 6, 34),
         rowHeight(8, 10, 28),
         rowHeight(17, 19, 28),
-        rowHeight(29, 31, 28),
-        rowHeight(47, 49, 28),
-        rowHeight(10, 69, 24),
+        rowHeight(30, 32, 28),
+        rowHeight(49, 51, 28),
+        rowHeight(10, 72, 24),
         repeatCell(
           cellRange(0, 125, 0, 14),
           {
@@ -3704,22 +3729,22 @@ async function applyDashboardModernLayout(sheets: GoogleSheetsService, sheetId: 
           'userEnteredFormat(backgroundColorStyle,horizontalAlignment,verticalAlignment,wrapStrategy,textFormat)',
         ),
         repeatCell(
-          cellRange(0, 3, 1, 12),
+          cellRange(0, 3, 1, 14),
           { ...background('#0b1f3a'), horizontalAlignment: 'CENTER', verticalAlignment: 'MIDDLE', textFormat: { ...textColor('#ffffff'), bold: true, fontFamily: 'Cambria', fontSize: 12 } },
           'userEnteredFormat(backgroundColorStyle,horizontalAlignment,verticalAlignment,textFormat)',
         ),
         repeatCell(
-          cellRange(0, 1, 1, 12),
+          cellRange(0, 1, 1, 14),
           { textFormat: { ...textColor('#ffffff'), bold: true, fontFamily: 'Cambria', fontSize: 18 } },
           'userEnteredFormat(textFormat)',
         ),
         repeatCell(
-          cellRange(4, 5, 1, 12),
+          cellRange(4, 5, 1, 14),
           { ...background('#d9e8ff'), horizontalAlignment: 'CENTER', textFormat: { ...textColor('#0b1f3a'), bold: true, fontFamily: 'Cambria', fontSize: 10 } },
           'userEnteredFormat(backgroundColorStyle,horizontalAlignment,textFormat)',
         ),
         repeatCell(
-          cellRange(5, 6, 1, 12),
+          cellRange(5, 6, 1, 14),
           { ...background('#ffffff'), horizontalAlignment: 'CENTER', textFormat: { ...textColor('#0b1f3a'), bold: true, fontFamily: 'Cambria', fontSize: 13 } },
           'userEnteredFormat(backgroundColorStyle,horizontalAlignment,textFormat)',
         ),
@@ -3738,9 +3763,24 @@ async function applyDashboardModernLayout(sheets: GoogleSheetsService, sheetId: 
           ),
         ),
         repeatCell(
-          cellRange(10, 69, 1, 12),
+          cellRange(10, 72, 1, 14),
           { ...background('#ffffff'), textFormat: { ...textColor('#0f172a'), fontFamily: 'Cambria', fontSize: 10 } },
           'userEnteredFormat(backgroundColorStyle,textFormat)',
+        ),
+        repeatCell(
+          cellRange(50, 71, 2, 3),
+          { textFormat: { ...textColor('#b91c1c'), bold: true, fontFamily: 'Cambria', fontSize: 10 } },
+          'userEnteredFormat(textFormat)',
+        ),
+        repeatCell(
+          cellRange(50, 71, 3, 4),
+          { textFormat: { ...textColor('#047857'), bold: true, fontFamily: 'Cambria', fontSize: 10 } },
+          'userEnteredFormat(textFormat)',
+        ),
+        repeatCell(
+          cellRange(50, 71, 4, 5),
+          { textFormat: { ...textColor('#334155'), bold: true, fontFamily: 'Cambria', fontSize: 10 } },
+          'userEnteredFormat(textFormat)',
         ),
         ...moneyRanges.map((range) =>
           repeatCell(
@@ -3752,7 +3792,7 @@ async function applyDashboardModernLayout(sheets: GoogleSheetsService, sheetId: 
         ...[
           cellRange(5, 6, 1, 2),
           cellRange(5, 6, 3, 4),
-          cellRange(5, 6, 7, 8),
+          cellRange(5, 6, 8, 9),
         ].map((range) =>
           repeatCell(
             range,
@@ -3761,21 +3801,21 @@ async function applyDashboardModernLayout(sheets: GoogleSheetsService, sheetId: 
           ),
         ),
         repeatCell(
-          cellRange(5, 6, 11, 12),
+          cellRange(5, 6, 12, 13),
           { numberFormat: { type: 'DATE', pattern: 'dd/mm/yyyy' } },
           'userEnteredFormat.numberFormat',
         ),
-        mergeRange(0, 1, 1, 12),
-        mergeRange(1, 2, 1, 12),
-        mergeRange(2, 3, 1, 12),
+        mergeRange(0, 1, 1, 14),
+        mergeRange(1, 2, 1, 14),
+        mergeRange(2, 3, 1, 14),
         mergeRange(8, 9, 1, 6),
         mergeRange(8, 9, 7, 12),
         mergeRange(17, 18, 1, 6),
-        mergeRange(17, 18, 7, 9),
-        mergeRange(29, 30, 1, 5),
-        mergeRange(29, 30, 7, 11),
-        mergeRange(47, 48, 1, 5),
-        mergeRange(47, 48, 7, 11),
+        mergeRange(17, 18, 7, 11),
+        mergeRange(30, 31, 1, 6),
+        mergeRange(30, 31, 7, 12),
+        mergeRange(49, 50, 1, 5),
+        mergeRange(49, 50, 7, 11),
         ...tableRanges.map((range) => tableBorder(range)),
       ],
     }),
@@ -3841,7 +3881,7 @@ async function repairDashboardValues(
     const stage = getCell(row, 27)
     const stageKey = stage && stage !== '-' ? stage : 'Sem regua'
     const recordDate = parseBrDate(getCell(row, 1))
-    const matter = getCell(row, 10) || 'Sem materia'
+    const matter = normalizeDashboardMatterLabel(getCell(row, 10))
     const updateDate = parseBrDate(getCell(row, 32))
     const daysOverdue = Number(getCell(row, 25))
 
@@ -3936,15 +3976,10 @@ async function repairDashboardValues(
 
   const historyValues = await sheets.readSheetValues(DASHBOARD_HISTORY_SHEET_NAME).catch(() => [])
   const lastHistoryRow = [...historyValues].reverse().find((row) => getCell(row || [], 1))
-  const weeklyStages = [
-    { label: 'Inadimplentes', stage: 'PENDENTE' },
-    { label: REGUA_OPTIONS[1], stage: REGUA_OPTIONS[1] },
-    { label: REGUA_OPTIONS[0], stage: REGUA_OPTIONS[0] },
-    { label: REGUA_OPTIONS[2], stage: REGUA_OPTIONS[2] },
-    { label: REGUA_OPTIONS[4], stage: REGUA_OPTIONS[4] },
-    { label: REGUA_OPTIONS[6], stage: REGUA_OPTIONS[6] },
-    { label: REGUA_OPTIONS[3], stage: REGUA_OPTIONS[3] },
-  ]
+  const weeklyStages = reguaLabels.map((label) => ({
+    label,
+    stage: label === 'Sem regua' ? 'Sem regua' : label,
+  }))
   const weeklyRows = weeklyStages.map((item, index) => {
     const current = (reguaMetrics.get(item.stage) || createMetric()).count
     const last = parseAmount(lastHistoryRow?.[index + 1]) || 0
@@ -3957,32 +3992,34 @@ async function repairDashboardValues(
   }
   const matterEntries = [...matterMetrics.entries()]
     .sort((left, right) => right[1].count - left[1].count)
-    .slice(0, 8)
+    .slice(0, 15)
   const maxMatterCount = Math.max(...matterEntries.map(([, metric]) => metric.count), 0)
   const matterRows = matterEntries.map(([label, metric]) => [
     label,
     metric.count,
-    buildBar(metric.count, maxMatterCount),
+    metric.active,
+    metric.inactive,
     metric.openAmount,
   ])
-  while (matterRows.length < 8) matterRows.push(['', 0, '', 0])
+  while (matterRows.length < 15) matterRows.push(['', 0, 0, 0, 0])
 
-  const stageDistributionEntries = reguaRows.slice(0, 8)
+  const stageDistributionEntries = reguaRows
   const maxStageCount = Math.max(...stageDistributionEntries.map((row) => Number(row[1] || 0)), 0)
   const stageDistributionRows = stageDistributionEntries.map((row) => [
     row[0],
     row[1],
-    buildBar(Number(row[1] || 0), maxStageCount),
+    row[2],
+    row[3],
     row[4],
   ])
 
   const totalOpenAmount = totalMetric.openAmount
-  const totalPaidAmount = totalMetric.paidAmount
-  const totalUpcomingAmount = totalMetric.upcomingAmount
   const overdueMetric = situationMetrics.get('Em atraso') || createMetric()
   const paidMetric = situationMetrics.get('Pago / quitado') || createMetric()
+  const upcomingMetric = situationMetrics.get('A vencer') || createMetric()
+  const noStageMetric = reguaMetrics.get('Sem regua') || createMetric()
   const emptyDashboardRow = (length: number) => Array.from({ length }, () => '')
-  const titleTail = emptyDashboardRow(10)
+  const titleTail = emptyDashboardRow(12)
 
   if (!dryRun) {
     await sheets.request(':batchUpdate', {
@@ -4057,7 +4094,7 @@ async function repairDashboardValues(
 
     await sheets.batchUpdateValues([
       {
-        range: `${dashboardSheet}!B1:L3`,
+        range: `${dashboardSheet}!B1:N3`,
         values: [
           ['Dashboard Financeiro | Indicador', ...titleTail],
           ['Visão executiva de inadimplência, recebimentos e régua de cobrança', ...titleTail],
@@ -4065,10 +4102,10 @@ async function repairDashboardValues(
         ],
       },
       {
-        range: `${dashboardSheet}!B5:L6`,
+        range: `${dashboardSheet}!B5:N6`,
         values: [
-          ['Clientes na base', '', 'Em atraso', '', 'Valor em aberto', '', 'Pagos / quitados', '', 'A vencer', '', 'Última atualização'],
-          [processed, '', overdueMetric.count, '', totalOpenAmount, '', paidMetric.count, '', totalUpcomingAmount, '', latestUpdateDate ? formatBrDate(latestUpdateDate) : ''],
+          ['Clientes na base', '', 'Em atraso', '', 'Valor em aberto', '', '', 'Pagos / quitados', '', 'A vencer', '', 'Última atualização', ''],
+          [processed, '', overdueMetric.count, '', totalOpenAmount, '', '', paidMetric.count, '', upcomingMetric.upcomingAmount, '', latestUpdateDate ? formatBrDate(latestUpdateDate) : '', ''],
         ],
       },
       {
@@ -4076,15 +4113,15 @@ async function repairDashboardValues(
         values: [['Resumo por situação', '', '', '', '', '', 'Resumo por ano', '', '', '', '']],
       },
       {
-        range: `${dashboardSheet}!B18:I18`,
-        values: [['Régua de cobrança', '', '', '', '', '', 'Acompanhamento operacional']],
+        range: `${dashboardSheet}!B18:K18`,
+        values: [['Régua de cobrança', '', '', '', '', '', 'Acompanhamento operacional', '', '', '']],
       },
       {
-        range: `${dashboardSheet}!B30:K30`,
-        values: [['Visão de carteira: matérias e valores', '', '', '', '', '', 'Distribuição da régua de cobrança', '', '', '']],
+        range: `${dashboardSheet}!B31:L31`,
+        values: [['Visão de carteira: matérias e valores', '', '', '', '', '', 'Distribuição da régua de cobrança', '', '', '', '']],
       },
       {
-        range: `${dashboardSheet}!B48:K48`,
+        range: `${dashboardSheet}!B50:K50`,
         values: [['Histórico mensal: em atraso x em dia', '', '', '', '', '', 'Evolução semanal da régua', '', '', '']],
       },
       {
@@ -4100,30 +4137,35 @@ async function repairDashboardValues(
         values: [['Etapa', 'Qtd', 'Ativos', 'Inativos', 'Valor aberto'], ...reguaRows],
       },
       {
-        range: `${dashboardSheet}!H19:I24`,
+        range: `${dashboardSheet}!H19:K29`,
         values: [
-          ['Indicador', 'Valor'],
-          ['Sem atualização hoje', Math.max(0, processed - updatedToday)],
-          ['Clientes sem regua', (reguaMetrics.get('Sem regua') || createMetric()).count],
-          ['Em atraso sem ação', overdueWithoutAction],
-          ['Dias vencido medio', overdueDaysCount ? overdueDaysTotal / overdueDaysCount : 0],
-          ['Maior atraso', maxOverdueDays],
+          ['Indicador', 'Valor', 'Base', 'Leitura'],
+          ['Clientes na base', processed, 'Linhas validas', 'Total operacional'],
+          ['Atualizados hoje', updatedToday, 'Coluna AF', 'Com movimento hoje'],
+          ['Sem atualização hoje', Math.max(0, processed - updatedToday), 'Coluna AF', 'Sem movimento hoje'],
+          ['Clientes sem régua', noStageMetric.count, 'Coluna AA', 'Precisa classificação'],
+          ['Em atraso sem ação', overdueWithoutAction, 'Status + régua', 'Prioridade alta'],
+          ['Ativos', totalMetric.active, 'Coluna X', 'Carteira ativa'],
+          ['Inativos', totalMetric.inactive, 'Coluna X', 'Carteira inativa'],
+          ['Dias vencidos médio', overdueDaysCount ? overdueDaysTotal / overdueDaysCount : 0, 'Coluna Y', 'Média em atraso'],
+          ['Maior atraso', maxOverdueDays, 'Coluna Y', 'Pior caso'],
+          ['Valor em aberto', totalOpenAmount, 'Coluna U', 'Total da carteira'],
         ],
       },
       {
-        range: `${dashboardSheet}!B31:E39`,
-        values: [['Matéria', 'Casos', 'Gráfico', 'Valor aberto'], ...matterRows],
+        range: `${dashboardSheet}!B32:F47`,
+        values: [['Matéria', 'Casos', 'Ativos', 'Inativos', 'Valor aberto'], ...matterRows],
       },
       {
-        range: `${dashboardSheet}!H31:K39`,
-        values: [['Etapa', 'Casos', 'Gráfico', 'Valor aberto'], ...stageDistributionRows],
+        range: `${dashboardSheet}!H32:L42`,
+        values: [['Etapa', 'Casos', 'Ativos', 'Inativos', 'Valor aberto'], ...stageDistributionRows],
       },
       {
-        range: `${dashboardSheet}!B49:E69`,
+        range: `${dashboardSheet}!B51:E71`,
         values: [['Mês', 'Em atraso', 'Em dia', 'Delta atraso'], ...monthlyRows],
       },
       {
-        range: `${dashboardSheet}!H49:K56`,
+        range: `${dashboardSheet}!H51:K61`,
         values: [['Etapa', 'Atual', 'Última medição', 'Delta'], ...weeklyRows],
       },
     ])
