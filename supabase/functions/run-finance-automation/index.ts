@@ -787,6 +787,19 @@ function normalizeSheetRowLength(row: string[], width = TARGET_END_COLUMN_INDEX)
   return normalized
 }
 
+function normalizeAmountZeroCells(row: string[]) {
+  if (!isClientDataRow(row)) return row
+
+  for (const columnIndex of [21, 22, 23]) {
+    const currentValue = getCell(row, columnIndex)
+    if (!currentValue) {
+      row[columnIndex - 1] = 0
+    }
+  }
+
+  return row
+}
+
 function isClientDataRow(row: string[]) {
   const clientName = getCell(row, SHEET_CLIENT_COLUMN_INDEX)
   if (!clientName) return false
@@ -891,7 +904,7 @@ function buildSortedMonthlySheetLayout(values: SheetValues, width = TARGET_END_C
     .slice(1, lastFilledRow)
     .map((row, index) => ({
       originalRowNumber: index + 2,
-      row: normalizeSheetRowLength(row || [], width),
+      row: normalizeAmountZeroCells(normalizeSheetRowLength(row || [], width)),
       date: parseBrDate(getCell(row || [], 1)),
     }))
     .filter((item) => isClientDataRow(item.row))
@@ -920,7 +933,7 @@ function buildSortedMonthlySheetLayout(values: SheetValues, width = TARGET_END_C
     const earliestOriginalRowNumber = Math.min(...bucket.map((item) => item.originalRowNumber))
     uniqueDataRows.push({
       originalRowNumber: earliestOriginalRowNumber,
-      row: normalizeSheetRowLength(mergedRow, width),
+      row: normalizeAmountZeroCells(normalizeSheetRowLength(mergedRow, width)),
       date: parseBrDate(getCell(mergedRow, 1)),
     })
   }
@@ -2558,11 +2571,11 @@ function computeColumnValue(
     case 'recordStatus':
       return deriveRecordStatus(trello)
     case 'openAmount':
-      return sheetNumber(openAmount)
+      return sheetNumber(openAmount ?? 0)
     case 'paidAmount':
-      return sheetNumber(paidAmount)
+      return sheetNumber(paidAmount ?? 0)
     case 'upcomingAmount':
-      return sheetNumber(upcomingAmount)
+      return sheetNumber(upcomingAmount ?? 0)
     case 'daysOverdue': {
       const diffDays = dueDate ? diffDaysFromToday(dueDate) : null
       return diffDays && diffDays > 0 ? String(diffDays) : '0'
