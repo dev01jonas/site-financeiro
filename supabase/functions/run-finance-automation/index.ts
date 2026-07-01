@@ -7,6 +7,9 @@ const corsHeaders = {
 
 const GOOGLE_SCOPE = 'https://www.googleapis.com/auth/spreadsheets'
 const LOG_SHEET_NAME = 'LOG_AUTOMACAO'
+const DASHBOARD_SHEET_NAME = 'Dashboard Moderno'
+const DASHBOARD_HISTORY_SHEET_NAME = 'Hist Regua Semanal Q3 2026'
+const DASHBOARD_DATA_LAST_ROW = 20000
 const SHEET_CLIENT_COLUMN_INDEX = 9
 const SHEET_TOTAL_VALUE_COLUMN_INDEX = 11
 const TARGET_START_COLUMN_INDEX = 1 // A
@@ -72,7 +75,7 @@ type SheetCellValue = string | number | null
 type SheetValues = SheetCellValue[][]
 type AutomationBody = {
   dryRun?: boolean
-  maintenanceAction?: 'normalize_months'
+  maintenanceAction?: 'normalize_months' | 'repair_dashboard'
   normalizeLayout?: boolean
   maxRows?: number
   startRow?: number
@@ -2896,6 +2899,850 @@ async function normalizeMonthlySheetLayout(
   }
 }
 
+function dashboardMainRange(sheetName: string, column: string) {
+  return `${quoteSheetName(sheetName)}!${column}2:${column}${DASHBOARD_DATA_LAST_ROW}`
+}
+
+function dashboardCurrencyArray(sheetName: string, column: string) {
+  const range = dashboardMainRange(sheetName, column)
+  return `ARRAYFORMULA(IFERROR(VALUE(SUBSTITUTE(SUBSTITUTE(SUBSTITUTE(TO_TEXT(${range}),"R$",""),".",""),",",".")),0))`
+}
+
+function dashboardDateYearArray(sheetName: string) {
+  const range = dashboardMainRange(sheetName, 'A')
+  return `ARRAYFORMULA(IFERROR(YEAR(${range}),IFERROR(YEAR(DATEVALUE(TO_TEXT(${range}))),0)))`
+}
+
+function dashboardMonthKeyArray(sheetName: string) {
+  const range = dashboardMainRange(sheetName, 'A')
+  return `ARRAYFORMULA(IFERROR(TEXT(${range},"yyyy/mm"),IFERROR(TEXT(DATEVALUE(TO_TEXT(${range})),"yyyy/mm"),"")))`
+}
+
+function dashboardCurrencySum(sheetName: string, column: string) {
+  return `=SUM(${dashboardCurrencyArray(sheetName, column)})`
+}
+
+function dashboardCurrencySumIf(sheetName: string, column: string, statusRegex: string) {
+  return `=IFERROR(SUM(FILTER(${dashboardCurrencyArray(sheetName, column)},${dashboardMainRange(sheetName, 'I')}<>"",REGEXMATCH(UPPER(TO_TEXT(${dashboardMainRange(sheetName, 'O')})),"${statusRegex}"))),0)`
+}
+
+function dashboardCurrencySumByColumnValue(sheetName: string, amountColumn: string, criteriaColumn: string, criteriaCell: string) {
+  return `=IFERROR(SUM(FILTER(${dashboardCurrencyArray(sheetName, amountColumn)},${dashboardMainRange(sheetName, criteriaColumn)}=${criteriaCell})),0)`
+}
+
+function dashboardCurrencySumByYear(sheetName: string, column: string, yearCell: string) {
+  return `=IFERROR(SUM(FILTER(${dashboardCurrencyArray(sheetName, column)},${dashboardDateYearArray(sheetName)}=${yearCell})),0)`
+}
+
+function dashboardCountClients(sheetName: string) {
+  return `=COUNTA(${dashboardMainRange(sheetName, 'I')})`
+}
+
+function dashboardCountByStatus(sheetName: string, statusRegex: string) {
+  return `=IFERROR(COUNTA(FILTER(${dashboardMainRange(sheetName, 'I')},${dashboardMainRange(sheetName, 'I')}<>"",REGEXMATCH(UPPER(TO_TEXT(${dashboardMainRange(sheetName, 'O')})),"${statusRegex}"))),0)`
+}
+
+function dashboardCountByColumnValue(sheetName: string, criteriaColumn: string, criteriaCell: string) {
+  return `=COUNTIF(${dashboardMainRange(sheetName, criteriaColumn)},${criteriaCell})`
+}
+
+function gridRange(sheetId: number, startRowIndex: number, endRowIndex: number, startColumnIndex: number, endColumnIndex: number) {
+  return {
+    sheetId,
+    startRowIndex,
+    endRowIndex,
+    startColumnIndex,
+    endColumnIndex,
+  }
+}
+
+function dashboardPieChartSpec(sheetId: number) {
+  return {
+    title: 'Clientes por situacao',
+    pieChart: {
+      legendPosition: 'RIGHT_LEGEND',
+      threeDimensional: false,
+      domain: {
+        sourceRange: {
+          sources: [gridRange(sheetId, 9, 15, 1, 2)],
+        },
+      },
+      series: {
+        sourceRange: {
+          sources: [gridRange(sheetId, 9, 15, 2, 3)],
+        },
+      },
+    },
+  }
+}
+
+function dashboardMonthlyLineChartSpec(sheetId: number) {
+  return {
+    title: 'Historico mensal: em atraso x em dia',
+    basicChart: {
+      chartType: 'LINE',
+      legendPosition: 'BOTTOM_LEGEND',
+      lineSmoothing: true,
+      headerCount: 1,
+      axis: [
+        { position: 'BOTTOM_AXIS', title: 'Mes' },
+        { position: 'LEFT_AXIS', title: 'Quantidade' },
+      ],
+      domains: [
+        {
+          domain: {
+            sourceRange: {
+              sources: [gridRange(sheetId, 48, 69, 1, 2)],
+            },
+          },
+        },
+      ],
+      series: [
+        {
+          series: {
+            sourceRange: {
+              sources: [gridRange(sheetId, 48, 69, 2, 3)],
+            },
+          },
+          targetAxis: 'LEFT_AXIS',
+          colorStyle: { rgbColor: hexToGoogleColor('#2563eb') },
+        },
+        {
+          series: {
+            sourceRange: {
+              sources: [gridRange(sheetId, 48, 69, 3, 4)],
+            },
+          },
+          targetAxis: 'LEFT_AXIS',
+          colorStyle: { rgbColor: hexToGoogleColor('#ef4444') },
+        },
+      ],
+    },
+  }
+}
+
+function dashboardReguaBarChartSpec(sheetId: number) {
+  return {
+    title: 'Distribuicao da regua de cobranca',
+    basicChart: {
+      chartType: 'BAR',
+      legendPosition: 'NO_LEGEND',
+      headerCount: 1,
+      axis: [
+        { position: 'BOTTOM_AXIS', title: 'Quantidade' },
+        { position: 'LEFT_AXIS', title: 'Etapa' },
+      ],
+      domains: [
+        {
+          domain: {
+            sourceRange: {
+              sources: [gridRange(sheetId, 19, 29, 1, 2)],
+            },
+          },
+        },
+      ],
+      series: [
+        {
+          series: {
+            sourceRange: {
+              sources: [gridRange(sheetId, 19, 29, 2, 3)],
+            },
+          },
+          targetAxis: 'BOTTOM_AXIS',
+          colorStyle: { rgbColor: hexToGoogleColor('#0ea5e9') },
+        },
+      ],
+    },
+  }
+}
+
+async function repairDashboard(
+  sheets: GoogleSheetsService,
+  sheetName: string,
+  dryRun: boolean,
+): Promise<AutomationResult> {
+  const timestamp = buildTimestamp()
+  const values = await sheets.readSheetValues(sheetName)
+  const processed = Math.max(findLastFilledRow(values) - 1, 0)
+
+  await sheets.ensureRowCapacity(DASHBOARD_SHEET_NAME, 80)
+  await sheets.ensureColumnCapacity(DASHBOARD_SHEET_NAME, 14)
+  const dashboardProperties = await sheets.getSheetProperties(DASHBOARD_SHEET_NAME)
+  const dashboardSheet = quoteSheetName(DASHBOARD_SHEET_NAME)
+
+  const situationRows = [
+    ['Em atraso', dashboardCountByStatus(sheetName, 'ATRASO'), dashboardCurrencySumIf(sheetName, 'U', 'ATRASO'), dashboardCurrencySumIf(sheetName, 'V', 'ATRASO'), dashboardCurrencySumIf(sheetName, 'W', 'ATRASO')],
+    ['A vencer', dashboardCountByStatus(sheetName, 'A VENCER'), dashboardCurrencySumIf(sheetName, 'U', 'A VENCER'), dashboardCurrencySumIf(sheetName, 'V', 'A VENCER'), dashboardCurrencySumIf(sheetName, 'W', 'A VENCER')],
+    ['Pago / quitado', `=${dashboardCountByStatus(sheetName, 'QUITADO').slice(1)}+${dashboardCountByStatus(sheetName, 'PAGO').slice(1)}`, dashboardCurrencySumIf(sheetName, 'U', 'QUITADO|PAGO'), dashboardCurrencySumIf(sheetName, 'V', 'QUITADO|PAGO'), dashboardCurrencySumIf(sheetName, 'W', 'QUITADO|PAGO')],
+    ['Rescindido', dashboardCountByStatus(sheetName, 'RESCIND'), dashboardCurrencySumIf(sheetName, 'U', 'RESCIND'), dashboardCurrencySumIf(sheetName, 'V', 'RESCIND'), dashboardCurrencySumIf(sheetName, 'W', 'RESCIND')],
+    ['Outros / vazio', '=MAX(0,$B$6-SUM(C11:C14))', '=MAX(0,$F$6-SUM(D11:D14))', '=MAX(0,$H$6-SUM(E11:E14))', '=MAX(0,$J$6-SUM(F11:F14))'],
+    ['Total', '=SUM(C11:C15)', '=SUM(D11:D15)', '=SUM(E11:E15)', '=SUM(F11:F15)'],
+  ]
+
+  const yearRows = [2022, 2023, 2024, 2025, 2026].map((year, index) => {
+    const rowNumber = 11 + index
+    return [
+      year,
+      dashboardCurrencySumByYear(sheetName, 'U', `H${rowNumber}`),
+      dashboardCurrencySumByYear(sheetName, 'V', `H${rowNumber}`),
+      dashboardCurrencySumByYear(sheetName, 'W', `H${rowNumber}`),
+      `=IFERROR(COUNTA(FILTER(${dashboardMainRange(sheetName, 'I')},${dashboardDateYearArray(sheetName)}=H${rowNumber},REGEXMATCH(UPPER(TO_TEXT(${dashboardMainRange(sheetName, 'O')})),"ATRASO"))),0)`,
+    ]
+  })
+
+  const reguaLabels = [...REGUA_OPTIONS, 'Sem regua']
+  const reguaRows = reguaLabels.map((label, index) => {
+    const rowNumber = 20 + index
+    const stageCell = `B${rowNumber}`
+    if (label === 'Sem regua') {
+      const missingCondition = `((${dashboardMainRange(sheetName, 'AA')}="")+(${dashboardMainRange(sheetName, 'AA')}="-"))>0`
+      return [
+        label,
+        `=IFERROR(COUNTA(FILTER(${dashboardMainRange(sheetName, 'I')},${dashboardMainRange(sheetName, 'I')}<>"",${missingCondition})),0)`,
+        `=IFERROR(COUNTA(FILTER(${dashboardMainRange(sheetName, 'I')},${dashboardMainRange(sheetName, 'X')}="ATIVO",${missingCondition})),0)`,
+        `=IFERROR(COUNTA(FILTER(${dashboardMainRange(sheetName, 'I')},${dashboardMainRange(sheetName, 'X')}="INATIVO",${missingCondition})),0)`,
+        `=IFERROR(SUM(FILTER(${dashboardCurrencyArray(sheetName, 'U')},${missingCondition})),0)`,
+      ]
+    }
+
+    return [
+      label,
+      dashboardCountByColumnValue(sheetName, 'AA', stageCell),
+      `=COUNTIFS(${dashboardMainRange(sheetName, 'AA')},${stageCell},${dashboardMainRange(sheetName, 'X')},"ATIVO")`,
+      `=COUNTIFS(${dashboardMainRange(sheetName, 'AA')},${stageCell},${dashboardMainRange(sheetName, 'X')},"INATIVO")`,
+      dashboardCurrencySumByColumnValue(sheetName, 'U', 'AA', stageCell),
+    ]
+  })
+
+  const monthlyRows = Array.from({ length: 20 }, (_, index) => {
+    const rowNumber = 49 + index
+    const monthCell = `B${rowNumber}`
+    const monthListFormula = `SORT(UNIQUE(FILTER(${dashboardMonthKeyArray(sheetName)},${dashboardMonthKeyArray(sheetName)}<>"")),1,FALSE)`
+    return [
+      `=IFERROR(INDEX(${monthListFormula},${index + 1}),"")`,
+      `=IF(${monthCell}="","",IFERROR(COUNTA(FILTER(${dashboardMainRange(sheetName, 'I')},${dashboardMonthKeyArray(sheetName)}=${monthCell},REGEXMATCH(UPPER(TO_TEXT(${dashboardMainRange(sheetName, 'O')})),"ATRASO"))),0))`,
+      `=IF(${monthCell}="","",IFERROR(COUNTA(FILTER(${dashboardMainRange(sheetName, 'I')},${dashboardMonthKeyArray(sheetName)}=${monthCell},REGEXMATCH(UPPER(TO_TEXT(${dashboardMainRange(sheetName, 'O')})),"EM DIA"))),0))`,
+      `=IF(${monthCell}="","",C${rowNumber}-D${rowNumber})`,
+    ]
+  })
+
+  const weeklyRows = ['Inadimplentes', 'Lembrete de Atraso', 'Aviso de Inadimplencia', 'Negociacao', 'Notificacao', 'Execucao', 'Rescisao'].map((label, index) => {
+    const rowNumber = 49 + index
+    const stageLabel = label === 'Inadimplentes' ? 'PENDENTE' : label
+    return [
+      label,
+      `=COUNTIF(${dashboardMainRange(sheetName, 'AA')},"${stageLabel}")`,
+      `=IFERROR(LOOKUP(2,1/(${quoteSheetName(DASHBOARD_HISTORY_SHEET_NAME)}!A2:A<>""),INDEX(${quoteSheetName(DASHBOARD_HISTORY_SHEET_NAME)}!B:H,,${index + 1})),0)`,
+      `=I${rowNumber}-J${rowNumber}`,
+    ]
+  })
+
+  const matterRows = Array.from({ length: 8 }, (_, index) => {
+    const rowNumber = 31 + index
+    const matterListFormula = `SORT(UNIQUE(FILTER(${dashboardMainRange(sheetName, 'J')},${dashboardMainRange(sheetName, 'J')}<>"")),1,TRUE)`
+    return [
+      `=IFERROR(INDEX(${matterListFormula},${index + 1}),"")`,
+      `=IF(B${rowNumber}="","",COUNTIF(${dashboardMainRange(sheetName, 'J')},B${rowNumber}))`,
+      `=IF(C${rowNumber}=0,"",SPARKLINE(C${rowNumber},{"charttype","bar";"max",MAX($C$31:$C$38)}))`,
+      `=IF(B${rowNumber}="","",${dashboardCurrencySumByColumnValue(sheetName, 'U', 'J', `B${rowNumber}`)})`,
+    ]
+  })
+
+  const stageDistributionRows = reguaRows.slice(0, 8).map((row, index) => {
+    const rowNumber = 31 + index
+    return [
+      row[0],
+      `=C${20 + index}`,
+      `=IF(I${rowNumber}=0,"",SPARKLINE(I${rowNumber},{"charttype","bar";"max",MAX($I$31:$I$38)}))`,
+      `=F${20 + index}`,
+    ]
+  })
+
+  if (!dryRun) {
+    await sheets.batchUpdateValues([
+      {
+        range: `${dashboardSheet}!B6:N6`,
+        values: [[
+          dashboardCountClients(sheetName),
+          '',
+          dashboardCountByStatus(sheetName, 'ATRASO'),
+          '',
+          dashboardCurrencySum(sheetName, 'U'),
+          '',
+          `=${dashboardCountByStatus(sheetName, 'QUITADO').slice(1)}+${dashboardCountByStatus(sheetName, 'PAGO').slice(1)}`,
+          '',
+          dashboardCurrencySum(sheetName, 'W'),
+          '',
+          '=IFERROR(MAX(FILTER(' + dashboardMainRange(sheetName, 'AF') + ',' + dashboardMainRange(sheetName, 'AF') + '<>"")),"")',
+          '',
+          '',
+        ]],
+      },
+      {
+        range: `${dashboardSheet}!B10:F16`,
+        values: [['Situacao', 'Qtd', 'Valor aberto', 'Valor pago', 'Valor a vencer'], ...situationRows],
+      },
+      {
+        range: `${dashboardSheet}!H10:L16`,
+        values: [['Ano', 'Valor aberto', 'Valor pago', 'Valor a vencer', 'Em atraso'], ...yearRows, ['Total', '=SUM(I11:I15)', '=SUM(J11:J15)', '=SUM(K11:K15)', '=SUM(L11:L15)']],
+      },
+      {
+        range: `${dashboardSheet}!B20:F30`,
+        values: [['Etapa', 'Qtd', 'Ativos', 'Inativos', 'Valor aberto'], ...reguaRows],
+      },
+      {
+        range: `${dashboardSheet}!H20:I25`,
+        values: [
+          ['Indicador', 'Valor'],
+          ['Sem atualizacao hoje', `=COUNTIFS(${dashboardMainRange(sheetName, 'AF')},">="&TODAY(),${dashboardMainRange(sheetName, 'AF')},"<"&TODAY()+1)`],
+          ['Clientes sem regua', '=C29'],
+          ['Em atraso sem acao', `=COUNTIFS(${dashboardMainRange(sheetName, 'O')},"*ATRASO*",${dashboardMainRange(sheetName, 'AA')},"") + COUNTIFS(${dashboardMainRange(sheetName, 'O')},"*ATRASO*",${dashboardMainRange(sheetName, 'AA')},"-")`],
+          ['Dias vencido medio', `=IFERROR(AVERAGE(FILTER(${dashboardMainRange(sheetName, 'Y')},${dashboardMainRange(sheetName, 'Y')}>0)),0)`],
+          ['Maior atraso', `=IFERROR(MAX(${dashboardMainRange(sheetName, 'Y')}),0)`],
+        ],
+      },
+      {
+        range: `${dashboardSheet}!B30:E38`,
+        values: [['Materia', 'Casos', 'Grafico', 'Valor aberto'], ...matterRows],
+      },
+      {
+        range: `${dashboardSheet}!H30:K38`,
+        values: [['Etapa', 'Casos', 'Grafico', 'Valor aberto'], ...stageDistributionRows],
+      },
+      {
+        range: `${dashboardSheet}!B49:E69`,
+        values: [['Mes', 'Em atraso', 'Em dia', 'Delta atraso'], ...monthlyRows],
+      },
+      {
+        range: `${dashboardSheet}!H49:K56`,
+        values: [['Etapa', 'Atual', 'Ultima medicao', 'Delta'], ...weeklyRows],
+      },
+    ])
+
+    const metadata = await sheets.request('?fields=sheets(properties(sheetId,title),charts(chartId))')
+    const dashboardSheetMetadata = (metadata.sheets || []).find(
+      (sheet: { properties?: { title?: string } }) => sheet.properties?.title === DASHBOARD_SHEET_NAME,
+    )
+    const chartRequests = [
+      ...((dashboardSheetMetadata?.charts || []) as Array<{ chartId?: number }>)
+        .filter((chart) => chart.chartId !== undefined)
+        .map((chart) => ({ deleteEmbeddedObject: { objectId: chart.chartId } })),
+      {
+        addChart: {
+          chart: {
+            spec: dashboardPieChartSpec(dashboardProperties.sheetId),
+            position: {
+              overlayPosition: {
+                anchorCell: { sheetId: dashboardProperties.sheetId, rowIndex: 36, columnIndex: 6 },
+                offsetXPixels: 10,
+                offsetYPixels: 8,
+                widthPixels: 440,
+                heightPixels: 300,
+              },
+            },
+          },
+        },
+      },
+      {
+        addChart: {
+          chart: {
+            spec: dashboardMonthlyLineChartSpec(dashboardProperties.sheetId),
+            position: {
+              overlayPosition: {
+                anchorCell: { sheetId: dashboardProperties.sheetId, rowIndex: 55, columnIndex: 1 },
+                offsetXPixels: 10,
+                offsetYPixels: 8,
+                widthPixels: 520,
+                heightPixels: 320,
+              },
+            },
+          },
+        },
+      },
+      {
+        addChart: {
+          chart: {
+            spec: dashboardReguaBarChartSpec(dashboardProperties.sheetId),
+            position: {
+              overlayPosition: {
+                anchorCell: { sheetId: dashboardProperties.sheetId, rowIndex: 55, columnIndex: 6 },
+                offsetXPixels: 10,
+                offsetYPixels: 8,
+                widthPixels: 520,
+                heightPixels: 320,
+              },
+            },
+          },
+        },
+      },
+    ]
+
+    await sheets.request(':batchUpdate', {
+      method: 'POST',
+      body: JSON.stringify({ requests: chartRequests }),
+    })
+  }
+
+  return {
+    dryRun,
+    sheetName,
+    pdfFileName: '',
+    timestamp,
+    startRow: 2,
+    processed,
+    skipped: 0,
+    matched: 0,
+    updated: dryRun ? 0 : 1,
+    refreshed: 0,
+    ignored: 0,
+    notFound: 0,
+    errors: 0,
+    updatedCells: dryRun ? 0 : 1,
+    logRows: 0,
+    preview: [
+      {
+        rowNumber: null,
+        clientName: DASHBOARD_SHEET_NAME,
+        action: dryRun ? 'Previa do dashboard' : 'Dashboard corrigido',
+        status: 'dashboard_atualizado',
+        sources: ['Google Sheets'],
+        errorMessage: '',
+        cardUrl: '',
+      },
+    ],
+    pendingCount: 0,
+    pendingSelections: [],
+    dashboard: {
+      created: 0,
+      updated: dryRun ? 0 : 1,
+      refreshed: 0,
+      pending: 0,
+      notFound: 0,
+      errors: 0,
+      matched: 0,
+      processed,
+      financial: {
+        openAmount: 0,
+        paidAmount: 0,
+        upcomingAmount: 0,
+      },
+      stageBreakdown: [],
+      recordStatusBreakdown: [],
+      actionBreakdown: [],
+    },
+  }
+}
+
+async function repairDashboardValues(
+  sheets: GoogleSheetsService,
+  sheetName: string,
+  dryRun: boolean,
+): Promise<AutomationResult> {
+  const timestamp = buildTimestamp()
+  const values = await sheets.readSheetValues(sheetName)
+  const dataRows = values.slice(1).filter((row) => isClientDataRow(row || []))
+  const processed = dataRows.length
+
+  await sheets.ensureRowCapacity(DASHBOARD_SHEET_NAME, 80)
+  await sheets.ensureColumnCapacity(DASHBOARD_SHEET_NAME, 14)
+  const dashboardProperties = await sheets.getSheetProperties(DASHBOARD_SHEET_NAME)
+  const dashboardSheet = quoteSheetName(DASHBOARD_SHEET_NAME)
+
+  const createMetric = () => ({
+    count: 0,
+    openAmount: 0,
+    paidAmount: 0,
+    upcomingAmount: 0,
+    active: 0,
+    inactive: 0,
+  })
+
+  const addMetricAmounts = (metric: ReturnType<typeof createMetric>, row: SheetCellValue[]) => {
+    metric.count += 1
+    metric.openAmount += parseAmount(getCell(row, 21)) || 0
+    metric.paidAmount += parseAmount(getCell(row, 22)) || 0
+    metric.upcomingAmount += parseAmount(getCell(row, 23)) || 0
+    const recordStatus = normalizeHeader(getCell(row, 24))
+    if (recordStatus === 'INATIVO') {
+      metric.inactive += 1
+    } else {
+      metric.active += 1
+    }
+  }
+
+  const situationLabels = ['Em atraso', 'A vencer', 'Pago / quitado', 'Rescindido', 'Outros / vazio']
+  const situationMetrics = new Map(situationLabels.map((label) => [label, createMetric()]))
+  const yearMetrics = new Map<number, ReturnType<typeof createMetric>>()
+  const reguaLabels = [...REGUA_OPTIONS, 'Sem regua']
+  const reguaMetrics = new Map(reguaLabels.map((label) => [label, createMetric()]))
+  const monthMetrics = new Map<string, { overdue: number; onTime: number }>()
+  const matterMetrics = new Map<string, ReturnType<typeof createMetric>>()
+
+  let latestUpdateDate: Date | null = null
+  let updatedToday = 0
+  let overdueWithoutAction = 0
+  let overdueDaysTotal = 0
+  let overdueDaysCount = 0
+  let maxOverdueDays = 0
+  const todayText = buildCurrentDate()
+
+  for (const rawRow of dataRows) {
+    const row = normalizeSheetRowLength(rawRow || [], TARGET_END_COLUMN_INDEX)
+    const financialStatus = normalizeHeader(getCell(row, 15))
+    const stage = getCell(row, 27)
+    const stageKey = stage && stage !== '-' ? stage : 'Sem regua'
+    const recordDate = parseBrDate(getCell(row, 1))
+    const matter = getCell(row, 10) || 'Sem materia'
+    const updateDate = parseBrDate(getCell(row, 32))
+    const daysOverdue = Number(getCell(row, 25))
+
+    let situation = 'Outros / vazio'
+    if (financialStatus.includes('ATRAS')) {
+      situation = 'Em atraso'
+    } else if (financialStatus.includes('VENCER')) {
+      situation = 'A vencer'
+    } else if (financialStatus.includes('QUITADO') || financialStatus.includes('PAGO')) {
+      situation = 'Pago / quitado'
+    } else if (financialStatus.includes('RESCIND')) {
+      situation = 'Rescindido'
+    }
+
+    addMetricAmounts(situationMetrics.get(situation) || situationMetrics.get('Outros / vazio')!, row)
+
+    if (recordDate) {
+      const year = recordDate.getFullYear()
+      if (!yearMetrics.has(year)) yearMetrics.set(year, createMetric())
+      addMetricAmounts(yearMetrics.get(year)!, row)
+
+      const monthKey = `${recordDate.getFullYear()}/${String(recordDate.getMonth() + 1).padStart(2, '0')}`
+      const monthMetric = monthMetrics.get(monthKey) || { overdue: 0, onTime: 0 }
+      if (financialStatus.includes('ATRAS')) monthMetric.overdue += 1
+      if (financialStatus.includes('DIA')) monthMetric.onTime += 1
+      monthMetrics.set(monthKey, monthMetric)
+    }
+
+    const resolvedStageKey = reguaMetrics.has(stageKey) ? stageKey : 'Sem regua'
+    addMetricAmounts(reguaMetrics.get(resolvedStageKey)!, row)
+
+    if (!matterMetrics.has(matter)) matterMetrics.set(matter, createMetric())
+    addMetricAmounts(matterMetrics.get(matter)!, row)
+
+    if (getCell(row, 32) === todayText) updatedToday += 1
+    if (updateDate && (!latestUpdateDate || updateDate > latestUpdateDate)) latestUpdateDate = updateDate
+    if (financialStatus.includes('ATRAS') && (!stage || stage === '-')) overdueWithoutAction += 1
+    if (Number.isFinite(daysOverdue) && daysOverdue > 0) {
+      overdueDaysTotal += daysOverdue
+      overdueDaysCount += 1
+      maxOverdueDays = Math.max(maxOverdueDays, daysOverdue)
+    }
+  }
+
+  const metricToRow = (label: string, metric: ReturnType<typeof createMetric>) => [
+    label,
+    metric.count,
+    metric.openAmount,
+    metric.paidAmount,
+    metric.upcomingAmount,
+  ]
+
+  const totalMetric = createMetric()
+  for (const metric of situationMetrics.values()) {
+    totalMetric.count += metric.count
+    totalMetric.openAmount += metric.openAmount
+    totalMetric.paidAmount += metric.paidAmount
+    totalMetric.upcomingAmount += metric.upcomingAmount
+  }
+
+  const situationRows = [
+    ...situationLabels.map((label) => metricToRow(label, situationMetrics.get(label)!)),
+    metricToRow('Total', totalMetric),
+  ]
+
+  const yearRows = [2022, 2023, 2024, 2025, 2026].map((year) => {
+    const metric = yearMetrics.get(year) || createMetric()
+    const overdueCount = dataRows.filter((row) => {
+      const date = parseBrDate(getCell(row, 1))
+      return date?.getFullYear() === year && normalizeHeader(getCell(row, 15)).includes('ATRAS')
+    }).length
+    return [year, metric.openAmount, metric.paidAmount, metric.upcomingAmount, overdueCount]
+  })
+  const totalYearRow = [
+    'Total',
+    yearRows.reduce((sum, row) => sum + Number(row[1] || 0), 0),
+    yearRows.reduce((sum, row) => sum + Number(row[2] || 0), 0),
+    yearRows.reduce((sum, row) => sum + Number(row[3] || 0), 0),
+    yearRows.reduce((sum, row) => sum + Number(row[4] || 0), 0),
+  ]
+
+  const reguaRows = reguaLabels.map((label) => {
+    const metric = reguaMetrics.get(label) || createMetric()
+    return [label, metric.count, metric.active, metric.inactive, metric.openAmount]
+  })
+
+  const monthlyRows = [...monthMetrics.entries()]
+    .sort(([left], [right]) => right.localeCompare(left))
+    .slice(0, 20)
+    .map(([month, metric]) => [month, metric.overdue, metric.onTime, metric.overdue - metric.onTime])
+  while (monthlyRows.length < 20) monthlyRows.push(['', 0, 0, 0])
+
+  const historyValues = await sheets.readSheetValues(DASHBOARD_HISTORY_SHEET_NAME).catch(() => [])
+  const lastHistoryRow = [...historyValues].reverse().find((row) => getCell(row || [], 1))
+  const weeklyStages = [
+    { label: 'Inadimplentes', stage: 'PENDENTE' },
+    { label: REGUA_OPTIONS[1], stage: REGUA_OPTIONS[1] },
+    { label: REGUA_OPTIONS[0], stage: REGUA_OPTIONS[0] },
+    { label: REGUA_OPTIONS[2], stage: REGUA_OPTIONS[2] },
+    { label: REGUA_OPTIONS[4], stage: REGUA_OPTIONS[4] },
+    { label: REGUA_OPTIONS[6], stage: REGUA_OPTIONS[6] },
+    { label: REGUA_OPTIONS[3], stage: REGUA_OPTIONS[3] },
+  ]
+  const weeklyRows = weeklyStages.map((item, index) => {
+    const current = (reguaMetrics.get(item.stage) || createMetric()).count
+    const last = parseAmount(lastHistoryRow?.[index + 1]) || 0
+    return [item.label, current, last, current - last]
+  })
+
+  const buildBar = (value: number, max: number) => {
+    if (!value || !max) return ''
+    return '|'.repeat(Math.max(1, Math.round((value / max) * 20)))
+  }
+  const matterEntries = [...matterMetrics.entries()]
+    .sort((left, right) => right[1].count - left[1].count)
+    .slice(0, 8)
+  const maxMatterCount = Math.max(...matterEntries.map(([, metric]) => metric.count), 0)
+  const matterRows = matterEntries.map(([label, metric]) => [
+    label,
+    metric.count,
+    buildBar(metric.count, maxMatterCount),
+    metric.openAmount,
+  ])
+  while (matterRows.length < 8) matterRows.push(['', 0, '', 0])
+
+  const stageDistributionEntries = reguaRows.slice(0, 8)
+  const maxStageCount = Math.max(...stageDistributionEntries.map((row) => Number(row[1] || 0)), 0)
+  const stageDistributionRows = stageDistributionEntries.map((row) => [
+    row[0],
+    row[1],
+    buildBar(Number(row[1] || 0), maxStageCount),
+    row[4],
+  ])
+
+  const totalOpenAmount = totalMetric.openAmount
+  const totalPaidAmount = totalMetric.paidAmount
+  const totalUpcomingAmount = totalMetric.upcomingAmount
+  const overdueMetric = situationMetrics.get('Em atraso') || createMetric()
+  const paidMetric = situationMetrics.get('Pago / quitado') || createMetric()
+
+  if (!dryRun) {
+    await sheets.request(':batchUpdate', {
+      method: 'POST',
+      body: JSON.stringify({
+        requests: [
+          {
+            unmergeCells: {
+              range: {
+                sheetId: dashboardProperties.sheetId,
+                startRowIndex: 8,
+                endRowIndex: 18,
+                startColumnIndex: 7,
+                endColumnIndex: 9,
+              },
+            },
+          },
+        ],
+      }),
+    })
+
+    await sheets.request('/values:batchClear', {
+      method: 'POST',
+      body: JSON.stringify({
+        ranges: [
+          `${dashboardSheet}!B10:F16`,
+          `${dashboardSheet}!H10:N16`,
+          `${dashboardSheet}!B20:F30`,
+          `${dashboardSheet}!H20:I25`,
+          `${dashboardSheet}!B30:E38`,
+          `${dashboardSheet}!H30:K38`,
+          `${dashboardSheet}!B49:E69`,
+          `${dashboardSheet}!H49:K56`,
+        ],
+      }),
+    })
+
+    await sheets.batchUpdateValues([
+      {
+        range: `${dashboardSheet}!B6:N6`,
+        values: [[
+          processed,
+          '',
+          overdueMetric.count,
+          '',
+          totalOpenAmount,
+          '',
+          paidMetric.count,
+          '',
+          totalUpcomingAmount,
+          '',
+          latestUpdateDate ? formatBrDate(latestUpdateDate) : '',
+          '',
+          '',
+        ]],
+      },
+      {
+        range: `${dashboardSheet}!B10:F16`,
+        values: [['Situacao', 'Qtd', 'Valor aberto', 'Valor pago', 'Valor a vencer'], ...situationRows],
+      },
+      {
+        range: `${dashboardSheet}!H10:L16`,
+        values: [['Ano', 'Valor aberto', 'Valor pago', 'Valor a vencer', 'Em atraso'], ...yearRows, totalYearRow],
+      },
+      {
+        range: `${dashboardSheet}!B20:F30`,
+        values: [['Etapa', 'Qtd', 'Ativos', 'Inativos', 'Valor aberto'], ...reguaRows],
+      },
+      {
+        range: `${dashboardSheet}!H20:I25`,
+        values: [
+          ['Indicador', 'Valor'],
+          ['Sem atualizacao hoje', Math.max(0, processed - updatedToday)],
+          ['Clientes sem regua', (reguaMetrics.get('Sem regua') || createMetric()).count],
+          ['Em atraso sem acao', overdueWithoutAction],
+          ['Dias vencido medio', overdueDaysCount ? overdueDaysTotal / overdueDaysCount : 0],
+          ['Maior atraso', maxOverdueDays],
+        ],
+      },
+      {
+        range: `${dashboardSheet}!B30:E38`,
+        values: [['Materia', 'Casos', 'Grafico', 'Valor aberto'], ...matterRows],
+      },
+      {
+        range: `${dashboardSheet}!H30:K38`,
+        values: [['Etapa', 'Casos', 'Grafico', 'Valor aberto'], ...stageDistributionRows],
+      },
+      {
+        range: `${dashboardSheet}!B49:E69`,
+        values: [['Mes', 'Em atraso', 'Em dia', 'Delta atraso'], ...monthlyRows],
+      },
+      {
+        range: `${dashboardSheet}!H49:K56`,
+        values: [['Etapa', 'Atual', 'Ultima medicao', 'Delta'], ...weeklyRows],
+      },
+    ])
+
+    const metadata = await sheets.request('?fields=sheets(properties(sheetId,title),charts(chartId))')
+    const dashboardSheetMetadata = (metadata.sheets || []).find(
+      (sheet: { properties?: { title?: string } }) => sheet.properties?.title === DASHBOARD_SHEET_NAME,
+    )
+    const chartRequests = [
+      ...((dashboardSheetMetadata?.charts || []) as Array<{ chartId?: number }>)
+        .filter((chart) => chart.chartId !== undefined)
+        .map((chart) => ({ deleteEmbeddedObject: { objectId: chart.chartId } })),
+      {
+        addChart: {
+          chart: {
+            spec: dashboardPieChartSpec(dashboardProperties.sheetId),
+            position: {
+              overlayPosition: {
+                anchorCell: { sheetId: dashboardProperties.sheetId, rowIndex: 36, columnIndex: 6 },
+                offsetXPixels: 10,
+                offsetYPixels: 8,
+                widthPixels: 440,
+                heightPixels: 300,
+              },
+            },
+          },
+        },
+      },
+      {
+        addChart: {
+          chart: {
+            spec: dashboardMonthlyLineChartSpec(dashboardProperties.sheetId),
+            position: {
+              overlayPosition: {
+                anchorCell: { sheetId: dashboardProperties.sheetId, rowIndex: 55, columnIndex: 1 },
+                offsetXPixels: 10,
+                offsetYPixels: 8,
+                widthPixels: 520,
+                heightPixels: 320,
+              },
+            },
+          },
+        },
+      },
+      {
+        addChart: {
+          chart: {
+            spec: dashboardReguaBarChartSpec(dashboardProperties.sheetId),
+            position: {
+              overlayPosition: {
+                anchorCell: { sheetId: dashboardProperties.sheetId, rowIndex: 55, columnIndex: 6 },
+                offsetXPixels: 10,
+                offsetYPixels: 8,
+                widthPixels: 520,
+                heightPixels: 320,
+              },
+            },
+          },
+        },
+      },
+    ]
+
+    await sheets.request(':batchUpdate', {
+      method: 'POST',
+      body: JSON.stringify({ requests: chartRequests }),
+    })
+  }
+
+  return {
+    dryRun,
+    sheetName,
+    pdfFileName: '',
+    timestamp,
+    startRow: 2,
+    processed,
+    skipped: 0,
+    matched: 0,
+    updated: dryRun ? 0 : 1,
+    refreshed: 0,
+    ignored: 0,
+    notFound: 0,
+    errors: 0,
+    updatedCells: dryRun ? 0 : 1,
+    logRows: 0,
+    preview: [
+      {
+        rowNumber: null,
+        clientName: DASHBOARD_SHEET_NAME,
+        action: dryRun ? 'Previa do dashboard' : 'Dashboard corrigido',
+        status: 'dashboard_atualizado',
+        sources: ['Google Sheets'],
+        errorMessage: '',
+        cardUrl: '',
+      },
+    ],
+    pendingCount: 0,
+    pendingSelections: [],
+    dashboard: {
+      created: 0,
+      updated: dryRun ? 0 : 1,
+      refreshed: 0,
+      pending: 0,
+      notFound: 0,
+      errors: 0,
+      matched: 0,
+      processed,
+      financial: {
+        openAmount: totalOpenAmount,
+        paidAmount: totalPaidAmount,
+        upcomingAmount: totalUpcomingAmount,
+      },
+      stageBreakdown: [],
+      recordStatusBreakdown: [],
+      actionBreakdown: [],
+    },
+  }
+}
+
 async function runAutomation(req: Request): Promise<AutomationResult> {
   await assertCanRun(req)
 
@@ -2924,6 +3771,10 @@ async function runAutomation(req: Request): Promise<AutomationResult> {
 
   if (body.maintenanceAction === 'normalize_months') {
     return normalizeMonthlySheetLayout(sheets, sheetName, dryRun)
+  }
+
+  if (body.maintenanceAction === 'repair_dashboard') {
+    return repairDashboardValues(sheets, sheetName, dryRun)
   }
 
   if (pdfRecords.length === 0) {
