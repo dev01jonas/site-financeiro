@@ -1,8 +1,39 @@
 import { createClient } from 'npm:@supabase/supabase-js@2'
 
-const corsHeaders = {
-  'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
+const DEFAULT_ALLOWED_ORIGINS = [
+  'https://site-financeiro-blush.vercel.app',
+  'http://localhost:8080',
+  'http://localhost:8081',
+]
+
+class HttpError extends Error {
+  status: number
+
+  constructor(status: number, message: string) {
+    super(message)
+    this.status = status
+  }
+}
+
+function getAllowedOrigins() {
+  const configuredOrigins = (Deno.env.get('ALLOWED_ORIGINS') || '')
+    .split(',')
+    .map((origin) => origin.trim())
+    .filter(Boolean)
+
+  return configuredOrigins.length > 0 ? configuredOrigins : DEFAULT_ALLOWED_ORIGINS
+}
+
+function buildCorsHeaders(req: Request) {
+  const origin = req.headers.get('origin') || ''
+  const allowedOrigins = getAllowedOrigins()
+  const allowedOrigin = allowedOrigins.includes(origin) ? origin : allowedOrigins[0]
+
+  return {
+    'Access-Control-Allow-Origin': allowedOrigin,
+    'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
+    Vary: 'Origin',
+  }
 }
 
 const SUPPORT_PHONE = '2364-4647'
@@ -24,6 +55,44 @@ function escapeHtml(value: string) {
     .replaceAll('>', '&gt;')
     .replaceAll('"', '&quot;')
     .replaceAll("'", '&#39;')
+}
+
+async function assertCanSendBilling(req: Request) {
+  const supabaseUrl = Deno.env.get('SUPABASE_URL')
+  const anonKey = Deno.env.get('SUPABASE_ANON_KEY') || Deno.env.get('SUPABASE_PUBLISHABLE_KEY')
+  const authHeader = req.headers.get('authorization')
+
+  if (!supabaseUrl || !anonKey) {
+    throw new HttpError(500, 'Configuração de autenticação ausente.')
+  }
+
+  if (!authHeader?.toLowerCase().startsWith('bearer ')) {
+    throw new HttpError(401, 'Usuário não autenticado.')
+  }
+
+  const userSupabase = createClient(supabaseUrl, anonKey, {
+    global: {
+      headers: {
+        Authorization: authHeader,
+      },
+    },
+  })
+
+  const { data: userData, error: userError } = await userSupabase.auth.getUser()
+
+  if (userError || !userData.user) {
+    throw new HttpError(401, 'Usuário não autenticado.')
+  }
+
+  const requireAdmin = (Deno.env.get('BILLING_EMAIL_REQUIRE_ADMIN') || 'false').toLowerCase() === 'true'
+  const rpcName = requireAdmin ? 'is_admin' : 'is_approved'
+  const { data: allowed, error: accessError } = await userSupabase.rpc(rpcName, {
+    _user_id: userData.user.id,
+  })
+
+  if (accessError || allowed !== true) {
+    throw new HttpError(403, requireAdmin ? 'Apenas administradores podem enviar cobranças.' : 'Usuário não aprovado.')
+  }
 }
 
 function buildEmailHtml({
@@ -144,27 +213,25 @@ function buildEmailHtml({
 }
 
 Deno.serve(async (req) => {
+  const corsHeaders = buildCorsHeaders(req)
+
   if (req.method === 'OPTIONS') {
     return new Response('ok', { headers: corsHeaders })
   }
 
-  const RESEND_API_KEY = Deno.env.get('RESEND_API_KEY')
-  if (!RESEND_API_KEY) {
-    return new Response(JSON.stringify({ error: 'RESEND_API_KEY not configured' }), {
-      status: 500,
-      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-    })
-  }
-
-  const serviceRoleKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')
-  if (!serviceRoleKey) {
-    return new Response(JSON.stringify({ error: 'SUPABASE_SERVICE_ROLE_KEY not configured' }), {
-      status: 500,
-      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-    })
-  }
-
   try {
+    await assertCanSendBilling(req)
+
+    const RESEND_API_KEY = Deno.env.get('RESEND_API_KEY')
+    if (!RESEND_API_KEY) {
+      throw new HttpError(500, 'RESEND_API_KEY not configured')
+    }
+
+    const serviceRoleKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')
+    if (!serviceRoleKey) {
+      throw new HttpError(500, 'SUPABASE_SERVICE_ROLE_KEY not configured')
+    }
+
     const supabaseUrl = Deno.env.get('SUPABASE_URL')!
     const origin = req.headers.get('origin')
     const { records, messageTemplate } = await req.json()
@@ -269,8 +336,9 @@ Deno.serve(async (req) => {
     })
   } catch (err) {
     const msg = err instanceof Error ? err.message : 'Unknown error'
+    const status = err instanceof HttpError ? err.status : 500
     return new Response(JSON.stringify({ error: msg }), {
-      status: 500,
+      status,
       headers: { ...corsHeaders, 'Content-Type': 'application/json' },
     })
   }

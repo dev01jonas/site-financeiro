@@ -1,7 +1,7 @@
 import { createClient } from 'npm:@supabase/supabase-js@2'
 
 const corsHeaders = {
-  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Origin': Deno.env.get('AUTOMATION_ALLOWED_ORIGIN') || 'https://site-financeiro-blush.vercel.app',
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 }
 
@@ -431,6 +431,34 @@ function canMatchShortenedName(leftName: string, rightName: string) {
 
 function quoteSheetName(sheetName: string) {
   return `'${sheetName.replaceAll("'", "''")}'`
+}
+
+function localizeFormulaSeparators(formula: string) {
+  let localized = ''
+  let inString = false
+
+  for (let index = 0; index < formula.length; index += 1) {
+    const char = formula[index]
+    const previous = formula[index - 1]
+
+    if (char === '"' && previous !== '\\') {
+      inString = !inString
+    }
+
+    localized += !inString && char === ',' ? ';' : char
+  }
+
+  return localized
+}
+
+function localizeDashboardValues(values: SheetValues): SheetValues {
+  return values.map((row) =>
+    row.map((cell) =>
+      typeof cell === 'string' && cell.startsWith('=')
+        ? localizeFormulaSeparators(cell)
+        : cell,
+    ),
+  )
 }
 
 function columnLetter(indexOneBased: number) {
@@ -3060,7 +3088,7 @@ function dashboardMainRange(sheetName: string, column: string) {
 
 function dashboardCurrencyArray(sheetName: string, column: string) {
   const range = dashboardMainRange(sheetName, column)
-  return `ARRAYFORMULA(IFERROR(VALUE(SUBSTITUTE(SUBSTITUTE(SUBSTITUTE(TO_TEXT(${range}),"R$",""),".",""),",",".")),0))`
+  return `ARRAYFORMULA(IFERROR(VALUE(SUBSTITUTE(SUBSTITUTE(TO_TEXT(${range}),"R$",""),".","")),0))`
 }
 
 function dashboardDateYearArray(sheetName: string) {
@@ -3245,11 +3273,11 @@ async function repairDashboard(
     ]
   })
 
-  const reguaLabels = [...REGUA_OPTIONS, 'Sem regua']
+  const reguaLabels = [...REGUA_OPTIONS, 'Sem régua']
   const reguaRows = reguaLabels.map((label, index) => {
     const rowNumber = 20 + index
     const stageCell = `B${rowNumber}`
-    if (label === 'Sem regua') {
+    if (label === 'Sem régua') {
       const missingCondition = `((${dashboardMainRange(sheetName, 'AA')}="")+(${dashboardMainRange(sheetName, 'AA')}="-"))>0`
       return [
         label,
@@ -3270,7 +3298,7 @@ async function repairDashboard(
   })
 
   const monthlyRows = Array.from({ length: 20 }, (_, index) => {
-    const rowNumber = 49 + index
+    const rowNumber = 50 + index
     const monthCell = `B${rowNumber}`
     const monthListFormula = `SORT(UNIQUE(FILTER(${dashboardMonthKeyArray(sheetName)},${dashboardMonthKeyArray(sheetName)}<>"")),1,FALSE)`
     return [
@@ -3281,40 +3309,100 @@ async function repairDashboard(
     ]
   })
 
-  const weeklyRows = ['Inadimplentes', 'Lembrete de Atraso', 'Aviso de Inadimplencia', 'Negociacao', 'Notificacao', 'Execucao', 'Rescisao'].map((label, index) => {
-    const rowNumber = 49 + index
-    const stageLabel = label === 'Inadimplentes' ? 'PENDENTE' : label
+  const weeklyRows = [
+    { label: 'Inadimplentes', stage: 'PENDENTE' },
+    { label: 'Lembrete de Atraso', stage: REGUA_OPTIONS[1] },
+    { label: 'Aviso de Inadimplência', stage: REGUA_OPTIONS[0] },
+    { label: 'Negociação', stage: REGUA_OPTIONS[2] },
+    { label: 'Notificação', stage: REGUA_OPTIONS[4] },
+    { label: 'Execução', stage: REGUA_OPTIONS[6] },
+    { label: 'Rescisão', stage: REGUA_OPTIONS[3] },
+  ].map((item, index) => {
+    const rowNumber = 50 + index
     return [
-      label,
-      `=COUNTIF(${dashboardMainRange(sheetName, 'AA')},"${stageLabel}")`,
+      item.label,
+      `=COUNTIF(${dashboardMainRange(sheetName, 'AA')},"${item.stage}")`,
       `=IFERROR(LOOKUP(2,1/(${quoteSheetName(DASHBOARD_HISTORY_SHEET_NAME)}!A2:A<>""),INDEX(${quoteSheetName(DASHBOARD_HISTORY_SHEET_NAME)}!B:H,,${index + 1})),0)`,
       `=I${rowNumber}-J${rowNumber}`,
     ]
   })
 
   const matterRows = Array.from({ length: 8 }, (_, index) => {
-    const rowNumber = 31 + index
+    const rowNumber = 32 + index
     const matterListFormula = `SORT(UNIQUE(FILTER(${dashboardMainRange(sheetName, 'J')},${dashboardMainRange(sheetName, 'J')}<>"")),1,TRUE)`
+    const matterOpenAmountFormula = dashboardCurrencySumByColumnValue(sheetName, 'U', 'J', `B${rowNumber}`).replace(/^=/, '')
     return [
       `=IFERROR(INDEX(${matterListFormula},${index + 1}),"")`,
       `=IF(B${rowNumber}="","",COUNTIF(${dashboardMainRange(sheetName, 'J')},B${rowNumber}))`,
-      `=IF(C${rowNumber}=0,"",SPARKLINE(C${rowNumber},{"charttype","bar";"max",MAX($C$31:$C$38)}))`,
-      `=IF(B${rowNumber}="","",${dashboardCurrencySumByColumnValue(sheetName, 'U', 'J', `B${rowNumber}`)})`,
+      `=IF(C${rowNumber}=0,"",REPT("|",MAX(1,ROUND(C${rowNumber}/MAX($C$32:$C$39)*20))))`,
+      `=IF(B${rowNumber}="","",${matterOpenAmountFormula})`,
     ]
   })
 
   const stageDistributionRows = reguaRows.slice(0, 8).map((row, index) => {
-    const rowNumber = 31 + index
+    const rowNumber = 32 + index
     return [
       row[0],
       `=C${20 + index}`,
-      `=IF(I${rowNumber}=0,"",SPARKLINE(I${rowNumber},{"charttype","bar";"max",MAX($I$31:$I$38)}))`,
+      `=IF(I${rowNumber}=0,"",REPT("|",MAX(1,ROUND(I${rowNumber}/MAX($I$32:$I$39)*20))))`,
       `=F${20 + index}`,
     ]
   })
 
   if (!dryRun) {
-    await sheets.batchUpdateValues([
+    await sheets.request(':batchUpdate', {
+      method: 'POST',
+      body: JSON.stringify({
+        requests: [
+          {
+            unmergeCells: {
+              range: {
+                sheetId: dashboardProperties.sheetId,
+                startRowIndex: 0,
+                endRowIndex: 125,
+                startColumnIndex: 0,
+                endColumnIndex: 20,
+              },
+            },
+          },
+        ],
+      }),
+    })
+
+    await sheets.request('/values:batchClear', {
+      method: 'POST',
+      body: JSON.stringify({
+        ranges: [`${dashboardSheet}!A1:T125`],
+      }),
+    })
+
+    const dashboardValueUpdates = [
+      {
+        range: `${dashboardSheet}!B1:L3`,
+        values: [
+          ['Dashboard Financeiro | Indicador', '', '', '', '', '', '', '', '', '', ''],
+          ['Visão executiva de inadimplência, recebimentos e régua de cobrança', '', '', '', '', '', '', '', '', '', ''],
+          [`Atualizado automaticamente pela base ${sheetName} em ${timestamp}`, '', '', '', '', '', '', '', '', '', ''],
+        ],
+      },
+      {
+        range: `${dashboardSheet}!B5:N5`,
+        values: [[
+          'Clientes na base',
+          '',
+          'Em atraso',
+          '',
+          'Valor em aberto',
+          '',
+          'Pagos / quitados',
+          '',
+          'A vencer',
+          '',
+          'Última atualização',
+          '',
+          '',
+        ]],
+      },
       {
         range: `${dashboardSheet}!B6:N6`,
         values: [[
@@ -3334,45 +3422,68 @@ async function repairDashboard(
         ]],
       },
       {
+        range: `${dashboardSheet}!B9:L9`,
+        values: [['Resumo por situação', '', '', '', '', '', 'Resumo por ano', '', '', '', '']],
+      },
+      {
+        range: `${dashboardSheet}!B18:I18`,
+        values: [['Régua de cobrança', '', '', '', '', '', 'Acompanhamento operacional', '']],
+      },
+      {
+        range: `${dashboardSheet}!B30:K30`,
+        values: [['Visão de carteira: matérias e valores', '', '', '', '', '', 'Distribuição da régua de cobrança', '', '', '']],
+      },
+      {
+        range: `${dashboardSheet}!B48:K48`,
+        values: [['Histórico mensal: em atraso x em dia', '', '', '', '', '', 'Evolução semanal da régua', '', '', '']],
+      },
+      {
         range: `${dashboardSheet}!B10:F16`,
-        values: [['Situacao', 'Qtd', 'Valor aberto', 'Valor pago', 'Valor a vencer'], ...situationRows],
+        values: [['Situação', 'Qtd', 'Valor aberto', 'Valor pago', 'Valor a vencer'], ...situationRows],
       },
       {
         range: `${dashboardSheet}!H10:L16`,
         values: [['Ano', 'Valor aberto', 'Valor pago', 'Valor a vencer', 'Em atraso'], ...yearRows, ['Total', '=SUM(I11:I15)', '=SUM(J11:J15)', '=SUM(K11:K15)', '=SUM(L11:L15)']],
       },
       {
-        range: `${dashboardSheet}!B20:F30`,
+        range: `${dashboardSheet}!B19:F29`,
         values: [['Etapa', 'Qtd', 'Ativos', 'Inativos', 'Valor aberto'], ...reguaRows],
       },
       {
-        range: `${dashboardSheet}!H20:I25`,
+        range: `${dashboardSheet}!H19:I24`,
         values: [
           ['Indicador', 'Valor'],
-          ['Sem atualizacao hoje', `=COUNTIFS(${dashboardMainRange(sheetName, 'AF')},">="&TODAY(),${dashboardMainRange(sheetName, 'AF')},"<"&TODAY()+1)`],
-          ['Clientes sem regua', '=C29'],
-          ['Em atraso sem acao', `=COUNTIFS(${dashboardMainRange(sheetName, 'O')},"*ATRASO*",${dashboardMainRange(sheetName, 'AA')},"") + COUNTIFS(${dashboardMainRange(sheetName, 'O')},"*ATRASO*",${dashboardMainRange(sheetName, 'AA')},"-")`],
-          ['Dias vencido medio', `=IFERROR(AVERAGE(FILTER(${dashboardMainRange(sheetName, 'Y')},${dashboardMainRange(sheetName, 'Y')}>0)),0)`],
+          ['Sem atualização hoje', `=MAX(0,$B$6-COUNTIFS(${dashboardMainRange(sheetName, 'AF')},">="&TODAY(),${dashboardMainRange(sheetName, 'AF')},"<"&TODAY()+1))`],
+          ['Clientes sem régua', '=C29'],
+          ['Em atraso sem ação', `=COUNTIFS(${dashboardMainRange(sheetName, 'O')},"*ATRASO*",${dashboardMainRange(sheetName, 'AA')},"") + COUNTIFS(${dashboardMainRange(sheetName, 'O')},"*ATRASO*",${dashboardMainRange(sheetName, 'AA')},"-")`],
+          ['Dias vencidos médio', `=IFERROR(AVERAGE(FILTER(${dashboardMainRange(sheetName, 'Y')},${dashboardMainRange(sheetName, 'Y')}>0)),0)`],
           ['Maior atraso', `=IFERROR(MAX(${dashboardMainRange(sheetName, 'Y')}),0)`],
         ],
       },
       {
-        range: `${dashboardSheet}!B30:E38`,
-        values: [['Materia', 'Casos', 'Grafico', 'Valor aberto'], ...matterRows],
+        range: `${dashboardSheet}!B31:E39`,
+        values: [['Matéria', 'Casos', 'Gráfico', 'Valor aberto'], ...matterRows],
       },
       {
-        range: `${dashboardSheet}!H30:K38`,
-        values: [['Etapa', 'Casos', 'Grafico', 'Valor aberto'], ...stageDistributionRows],
+        range: `${dashboardSheet}!H31:K39`,
+        values: [['Etapa', 'Casos', 'Gráfico', 'Valor aberto'], ...stageDistributionRows],
       },
       {
         range: `${dashboardSheet}!B49:E69`,
-        values: [['Mes', 'Em atraso', 'Em dia', 'Delta atraso'], ...monthlyRows],
+        values: [['Mês', 'Em atraso', 'Em dia', 'Delta atraso'], ...monthlyRows],
       },
       {
         range: `${dashboardSheet}!H49:K56`,
-        values: [['Etapa', 'Atual', 'Ultima medicao', 'Delta'], ...weeklyRows],
+        values: [['Etapa', 'Atual', 'Última medição', 'Delta'], ...weeklyRows],
       },
-    ])
+    ]
+
+    await sheets.batchUpdateValues(
+      dashboardValueUpdates.map((update) => ({
+        ...update,
+        values: localizeDashboardValues(update.values),
+      })),
+    )
 
     const dashboardCellRange = (startRowIndex: number, endRowIndex: number, startColumnIndex: number, endColumnIndex: number) =>
       gridRange(dashboardProperties.sheetId, startRowIndex, endRowIndex, startColumnIndex, endColumnIndex)
@@ -3417,6 +3528,12 @@ async function repairDashboard(
       dashboardCellRange(19, 29, 5, 6),
       dashboardCellRange(31, 39, 4, 5),
       dashboardCellRange(31, 39, 10, 11),
+    ]
+    const textRanges = [
+      dashboardCellRange(31, 39, 1, 2),
+      dashboardCellRange(31, 39, 3, 4),
+      dashboardCellRange(31, 39, 7, 8),
+      dashboardCellRange(31, 39, 9, 10),
     ]
     const dashboardFormatRequests = [
       repeatCell(
@@ -3465,10 +3582,19 @@ async function repairDashboard(
           'userEnteredFormat.numberFormat',
         ),
       ),
+      ...textRanges.map((range) =>
+        repeatCell(
+          range,
+          { numberFormat: { type: 'TEXT' } },
+          'userEnteredFormat.numberFormat',
+        ),
+      ),
       ...[
         dashboardCellRange(5, 6, 1, 2),
         dashboardCellRange(5, 6, 3, 4),
         dashboardCellRange(5, 6, 7, 8),
+        dashboardCellRange(31, 39, 2, 3),
+        dashboardCellRange(31, 39, 8, 9),
       ].map((range) =>
         repeatCell(
           range,
@@ -4317,7 +4443,7 @@ async function runAutomation(req: Request): Promise<AutomationResult> {
   }
 
   if (body.maintenanceAction === 'repair_dashboard') {
-    return repairDashboardValues(sheets, sheetName, dryRun)
+    return repairDashboard(sheets, sheetName, dryRun)
   }
 
   if (body.maintenanceAction === 'sync_materia') {

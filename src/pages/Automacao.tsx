@@ -229,6 +229,10 @@ async function runAutomationRequest(payload: AutomationRequestPayload) {
     data: { session },
   } = await supabase.auth.getSession();
 
+  if (!session?.access_token) {
+    throw new Error('Faça login novamente para executar a automação.');
+  }
+
   const functionUrl = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/run-finance-automation`;
   const publishableKey = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY;
   const response = await fetch(functionUrl, {
@@ -236,7 +240,7 @@ async function runAutomationRequest(payload: AutomationRequestPayload) {
     headers: {
       'Content-Type': 'application/json',
       apikey: publishableKey,
-      Authorization: `Bearer ${session?.access_token || publishableKey}`,
+      Authorization: `Bearer ${session.access_token}`,
     },
     body: JSON.stringify(payload),
   });

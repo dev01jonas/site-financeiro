@@ -1,6 +1,30 @@
-const corsHeaders = {
-  'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
+const DEFAULT_ALLOWED_ORIGINS = [
+  'https://site-financeiro-blush.vercel.app',
+  'http://localhost:8080',
+  'http://localhost:8081',
+]
+
+function getAllowedOrigins() {
+  const configuredOrigins = (Deno.env.get('ALLOWED_ORIGINS') || '')
+    .split(',')
+    .map((origin) => origin.trim())
+    .filter(Boolean)
+
+  return configuredOrigins.length > 0 ? configuredOrigins : DEFAULT_ALLOWED_ORIGINS
+}
+
+function getSafeOrigin(req: Request) {
+  const origin = req.headers.get('origin') || ''
+  const allowedOrigins = getAllowedOrigins()
+  return allowedOrigins.includes(origin) ? origin : allowedOrigins[0]
+}
+
+function buildCorsHeaders(req: Request) {
+  return {
+    'Access-Control-Allow-Origin': getSafeOrigin(req),
+    'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
+    Vary: 'Origin',
+  }
 }
 
 function escapeHtml(value: string) {
@@ -13,6 +37,8 @@ function escapeHtml(value: string) {
 }
 
 Deno.serve(async (req) => {
+  const corsHeaders = buildCorsHeaders(req)
+
   if (req.method === 'OPTIONS') {
     return new Response('ok', { headers: corsHeaders })
   }
@@ -26,7 +52,7 @@ Deno.serve(async (req) => {
   }
 
   try {
-    const { email, fullName, origin } = await req.json()
+    const { email, fullName } = await req.json()
     const adminEmail = Deno.env.get('ADMIN_APPROVAL_EMAIL') || 'advogadosmodaelli06@gmail.com'
     const rawFromEmail = Deno.env.get('RESEND_FROM_EMAIL') || 'onboarding@resend.dev'
     const fromEmail = rawFromEmail.includes('<') ? rawFromEmail : `Modaelli Advogados <${rawFromEmail}>`
@@ -40,7 +66,7 @@ Deno.serve(async (req) => {
 
     const safeEmail = escapeHtml(email.trim())
     const safeName = escapeHtml((fullName || '').trim() || 'Nome n?o informado')
-    const accessUrl = origin ? `${origin}/acessos` : null
+    const accessUrl = `${getSafeOrigin(req)}/acessos`
 
     const html = `
       <div style="background:#f3f5f8;padding:32px 16px;font-family:Arial,sans-serif;">

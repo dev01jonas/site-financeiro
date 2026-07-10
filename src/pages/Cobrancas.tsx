@@ -232,34 +232,7 @@ async function sendBillingEmailRequest(records: BillingRecord[], messageTemplate
     return invokeResult.data as SendBillingResponse;
   }
 
-  const functionUrl = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/send-billing-email`;
-  const publishableKey = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY;
-  const response = await fetch(functionUrl, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      apikey: publishableKey,
-      Authorization: `Bearer ${publishableKey}`,
-    },
-    body: JSON.stringify(body),
-  });
-
-  const payload = await response.json().catch(() => null);
-
-  if (!response.ok) {
-    const detail =
-      payload && typeof payload === 'object'
-        ? payload.error || payload.message || payload.details
-        : null;
-
-    throw new Error(
-      typeof detail === 'string' && detail.trim()
-        ? detail
-        : getFunctionErrorMessage(invokeResult.error),
-    );
-  }
-
-  return (payload || { sent: 0, failed: 0, results: [] }) as SendBillingResponse;
+  throw new Error(getFunctionErrorMessage(invokeResult.error));
 }
 
 export default function Cobrancas() {

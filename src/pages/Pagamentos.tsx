@@ -48,6 +48,15 @@ function formatCurrency(value: number) {
   return `R$ ${value.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}`;
 }
 
+function escapeHtml(value: string | number | null | undefined) {
+  return String(value ?? '')
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#39;');
+}
+
 function formatDateToBr(value: string) {
   if (!value) return '';
   const [year, month, day] = value.split('-');
@@ -74,7 +83,56 @@ function buildPixPayload(clientName: string, amount: number, dueDate: string, pi
 function buildBoletoHtml(record: BillingRecord) {
   const amount = formatCurrency(record.amount);
   const issueDate = new Date(record.created_at || new Date().toISOString()).toLocaleDateString('pt-BR');
-  return `<!DOCTYPE html><html lang="pt-BR"><head><meta charset="UTF-8" /><title>Boleto Simples - ${record.client_name}</title><style>body{font-family:Arial,sans-serif;padding:32px;color:#0f172a}.sheet{max-width:860px;margin:0 auto;border:1px solid #cbd5e1;border-radius:16px;overflow:hidden}.header{background:#1e293b;color:white;padding:24px 28px}.body{padding:28px}.grid{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:20px}.card{border:1px solid #cbd5e1;border-radius:12px;padding:16px;background:#f8fafc}.label{font-size:12px;text-transform:uppercase;letter-spacing:1px;color:#64748b;margin-bottom:8px}.value{font-size:18px;font-weight:700}.notice{border-top:1px solid #cbd5e1;margin-top:24px;padding-top:18px;color:#475569;line-height:1.6}.reference{font-size:28px;font-weight:700;letter-spacing:2px;margin-top:8px}</style></head><body><div class="sheet"><div class="header"><div style="font-size:12px;text-transform:uppercase;letter-spacing:1.5px;color:#cbd5e1;">Boleto simples</div><h1 style="margin:8px 0 0;">${COMPANY_NAME}</h1><p style="margin:8px 0 0;color:#dbe4f0;">Documento interno para envio e controle manual da cobrança.</p></div><div class="body"><div class="grid"><div class="card"><div class="label">Cliente</div><div class="value">${record.client_name}</div></div><div class="card"><div class="label">Valor</div><div class="value">${amount}</div></div><div class="card"><div class="label">Vencimento</div><div class="value">${record.due_date}</div></div><div class="card"><div class="label">Emissão</div><div class="value">${issueDate}</div></div></div><div class="card"><div class="label">Referência de cobrança</div><div class="reference">${record.boleto_reference || 'PENDENTE'}</div></div><div class="notice"><p><strong>Favorecido:</strong> ${COMPANY_NAME}</p><p><strong>CNPJ:</strong> ${COMPANY_DOCUMENT}</p><p><strong>Observação:</strong> este boleto simples serve para organização interna e envio manual. Para registro bancário automático e compensação em banco, será necessária integração externa em uma próxima etapa.</p></div></div></div></body></html>`;
+  const safeClientName = escapeHtml(record.client_name);
+  const safeAmount = escapeHtml(amount);
+  const safeDueDate = escapeHtml(record.due_date);
+  const safeIssueDate = escapeHtml(issueDate);
+  const safeReference = escapeHtml(record.boleto_reference || 'PENDENTE');
+
+  return `
+    <!DOCTYPE html>
+    <html lang="pt-BR">
+      <head>
+        <meta charset="UTF-8" />
+        <title>Boleto Simples - ${safeClientName}</title>
+        <style>
+          body{font-family:Arial,sans-serif;padding:32px;color:#0f172a}
+          .sheet{max-width:860px;margin:0 auto;border:1px solid #cbd5e1;border-radius:16px;overflow:hidden}
+          .header{background:#1e293b;color:white;padding:24px 28px}
+          .body{padding:28px}
+          .grid{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:20px}
+          .card{border:1px solid #cbd5e1;border-radius:12px;padding:16px;background:#f8fafc}
+          .label{font-size:12px;text-transform:uppercase;letter-spacing:1px;color:#64748b;margin-bottom:8px}
+          .value{font-size:18px;font-weight:700}
+          .notice{border-top:1px solid #cbd5e1;margin-top:24px;padding-top:18px;color:#475569;line-height:1.6}
+          .reference{font-size:28px;font-weight:700;letter-spacing:2px;margin-top:8px}
+        </style>
+      </head>
+      <body>
+        <div class="sheet">
+          <div class="header">
+            <div style="font-size:12px;text-transform:uppercase;letter-spacing:1.5px;color:#cbd5e1;">Boleto simples</div>
+            <h1 style="margin:8px 0 0;">${COMPANY_NAME}</h1>
+            <p style="margin:8px 0 0;color:#dbe4f0;">Documento interno para envio e controle manual da cobrança.</p>
+          </div>
+          <div class="body">
+            <div class="grid">
+              <div class="card"><div class="label">Cliente</div><div class="value">${safeClientName}</div></div>
+              <div class="card"><div class="label">Valor</div><div class="value">${safeAmount}</div></div>
+              <div class="card"><div class="label">Vencimento</div><div class="value">${safeDueDate}</div></div>
+              <div class="card"><div class="label">Emissão</div><div class="value">${safeIssueDate}</div></div>
+            </div>
+            <div class="card"><div class="label">Referência de cobrança</div><div class="reference">${safeReference}</div></div>
+            <div class="notice">
+              <p><strong>Favorecido:</strong> ${COMPANY_NAME}</p>
+              <p><strong>CNPJ:</strong> ${COMPANY_DOCUMENT}</p>
+              <p><strong>Observação:</strong> este boleto simples serve para organização interna e envio manual.</p>
+            </div>
+          </div>
+        </div>
+      </body>
+    </html>
+  `;
 }
 
 function buildEmailMessage(record: BillingRecord) {
@@ -254,34 +312,7 @@ async function sendBillingEmailRequest(record: BillingRecord, messageTemplate: s
     return invokeResult.data;
   }
 
-  const functionUrl = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/send-billing-email`;
-  const publishableKey = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY;
-  const response = await fetch(functionUrl, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      apikey: publishableKey,
-      Authorization: `Bearer ${publishableKey}`,
-    },
-    body: JSON.stringify(body),
-  });
-
-  const payload = await response.json().catch(() => null);
-
-  if (!response.ok) {
-    const detail =
-      payload && typeof payload === 'object'
-        ? payload.error || payload.message || payload.details
-        : null;
-
-    throw new Error(
-      typeof detail === 'string' && detail.trim()
-        ? detail
-        : getFunctionErrorMessage(invokeResult.error),
-    );
-  }
-
-  return (payload || { sent: 0, failed: 0, results: [] }) as SendBillingResponse;
+  throw new Error(getFunctionErrorMessage(invokeResult.error));
 }
 
 export default function Pagamentos() {

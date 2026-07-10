@@ -27,3 +27,14 @@ dist-ssr
 .env
 .env.*
 supabase/.temp/
+
+# Local generated data / spreadsheet exports
+tmp_*.xls
+tmp_*.xlsx
+fill_zero_chunk_*.json
+*_export*.xls
+*_export*.xlsx
+*_verify*.xls
+*_verify*.xlsx
+*.bak
+*.backup
